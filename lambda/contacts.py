@@ -1,0 +1,135 @@
+import logging
+import os
+from typing import Any, Dict, List
+
+import awswrangler as wr
+import pandas as pd
+
+from hubspot_client import get_client, utc_now_iso
+from storage import ensure_bucket_env
+
+
+LOG = logging.getLogger(__name__)
+LOG.setLevel(logging.INFO)
+
+START_DATE = os.environ.get("START_DATE", "2024-01-01")
+S3_BUCKET = os.environ.get("S3_BUCKET")
+
+
+def _to_epoch_ms(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        s = str(value)
+        if s.isdigit():
+            return int(s)
+        # ISO string parse via pandas
+        ts = pd.to_datetime(s, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return None
+        return int(ts.value // 10**6)
+    except Exception:
+        return None
+
+
+def contacts_handler(_event, _context):
+    LOG.info("Running contacts ingest")
+    ensure_bucket_env()
+
+    from_iso = os.environ.get("CONTACTS_FROM", START_DATE)
+    to_iso = utc_now_iso()
+
+    client = get_client()
+    props = [
+        "hubspot_owner_id",
+        "createdate",
+        "lastmodifieddate",
+        "hs_object_id",
+        "firstname",
+        "lastname",
+        "email",
+    ]
+
+    # Fetch by createdate
+    created_rows: List[Dict[str, Any]] = client.search_between(
+        object_type="contacts",
+        properties=props,
+        from_iso=from_iso,
+        to_iso=to_iso,
+        page_limit=100,
+        primary_prop="createdate",
+        fallback_prop="lastmodifieddate",
+    )
+
+    # Fetch by lastmodifieddate to capture older contacts worked recently
+    modified_rows: List[Dict[str, Any]] = client.search_between(
+        object_type="contacts",
+        properties=props,
+        from_iso=from_iso,
+        to_iso=to_iso,
+        page_limit=100,
+        primary_prop="lastmodifieddate",
+        fallback_prop="createdate",
+    )
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for row in created_rows + modified_rows:
+        cid = row.get("id")
+        p = row.get("properties", {})
+        if not cid:
+            continue
+        cur = by_id.get(cid, {})
+        # merge, prefer existing if present
+        cur_props = cur.get("properties", {})
+        cur_props.update({k: v for k, v in p.items() if v is not None})
+        cur["id"] = cid
+        cur["properties"] = cur_props
+        by_id[cid] = cur
+
+    if not by_id:
+        LOG.info("No contacts to write")
+        return {"written": 0}
+
+    records: List[Dict[str, Any]] = []
+    for cid, row in by_id.items():
+        props = row.get("properties", {})
+        created_ms = _to_epoch_ms(props.get("createdate"))
+        modified_ms = _to_epoch_ms(props.get("lastmodifieddate"))
+        records.append(
+            {
+                "contact_id": cid,
+                "owner_id": props.get("hubspot_owner_id"),
+                "created_at_ms": created_ms,
+                "last_modified_ms": modified_ms,
+            }
+        )
+
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        LOG.info("No contacts to write after normalization")
+        return {"written": 0}
+
+    df["created_at"] = pd.to_datetime(
+        df["created_at_ms"], unit="ms", utc=True, errors="coerce"
+    )
+    df["last_modified_at"] = pd.to_datetime(
+        df["last_modified_ms"], unit="ms", utc=True, errors="coerce"
+    )
+    # Partition by date(coalesce(created,last_modified))
+    df["dt"] = df["created_at"].fillna(df["last_modified_at"]).dt.strftime("%Y-%m-%d")
+
+    out_cols = ["contact_id", "owner_id", "created_at", "last_modified_at", "dt"]
+    out_df = df[out_cols].copy()
+
+    path = f"s3://{S3_BUCKET}/curated/contacts/"
+    wr.s3.to_parquet(
+        df=out_df,
+        path=path,
+        dataset=True,
+        compression="snappy",
+        partition_cols=["dt"],
+    )
+    LOG.info("Wrote %s contact rows to %s", len(out_df), path)
+    return {"written": int(len(out_df))}
