@@ -297,6 +297,76 @@ class HubSpotClient:
             time.sleep(self.rate_limit_pause)
         return out
 
+    def batch_read_associations_v4(
+        self,
+        from_object: str,
+        to_object: str,
+        from_ids: List[str],
+        batch_size: int = 100,
+    ) -> Dict[str, List[str]]:
+        """Batch-read associations (v4) and return mapping from from_id -> list of to_ids.
+
+        Uses POST /crm/v4/associations/{from}/{to}/batch/read
+        """
+        association_map: Dict[str, List[str]] = {}
+        if not from_ids:
+            return association_map
+        # Chunk inputs to avoid payload limits
+        for i in range(0, len(from_ids), batch_size):
+            chunk = [fid for fid in from_ids[i : i + batch_size] if fid]
+            if not chunk:
+                continue
+            try:
+                data = self.request(
+                    method="POST",
+                    endpoint=f"/crm/v4/associations/{from_object}/{to_object}/batch/read",
+                    json={"inputs": [{"id": fid} for fid in chunk]},
+                    timeout=60,
+                )
+            except Exception as e:
+                # If v4 is unavailable for some accounts, skip gracefully
+                LOG.warning(
+                    "Association batch read failed for %s -> %s: %s",
+                    from_object,
+                    to_object,
+                    e,
+                )
+                continue
+
+            results = data.get("results", []) if isinstance(data, dict) else []
+            for item in results:
+                # Flexible parsing across possible shapes
+                frm_obj = item.get("from") if isinstance(item, dict) else None
+                frm_id = None
+                if isinstance(frm_obj, dict):
+                    frm_id = (
+                        frm_obj.get("id")
+                        or frm_obj.get("objectId")
+                        or frm_obj.get("fromObjectId")
+                    )
+                frm_id = (
+                    frm_id
+                    or item.get("fromId")
+                    or item.get("fromObjectId")
+                    or item.get("id")
+                )
+                if not frm_id:
+                    continue
+                to_list = item.get("to") or item.get("toObjects") or []
+                collected: List[str] = []
+                if isinstance(to_list, list):
+                    for t in to_list:
+                        if isinstance(t, dict):
+                            tid = (
+                                t.get("id") or t.get("toObjectId") or t.get("objectId")
+                            )
+                            if tid:
+                                collected.append(str(tid))
+                        elif isinstance(t, (str, int)):
+                            collected.append(str(t))
+                association_map[str(frm_id)] = collected
+        return association_map
+
 
 _CLIENT: Optional[HubSpotClient] = None
 _CLIENT_AT: float = 0.0

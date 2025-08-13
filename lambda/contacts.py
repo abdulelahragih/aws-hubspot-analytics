@@ -133,3 +133,75 @@ def contacts_handler(_event, _context):
     )
     LOG.info("Wrote %s contact rows to %s", len(out_df), path)
     return {"written": int(len(out_df))}
+
+
+def contacts_dim_handler(_event, _context):
+    """Ingest contacts as a dimension table with basic attributes.
+
+    Output: s3://{bucket}/dim/contacts/ as a single, non-partitioned snapshot (overwrite each run)
+    Columns: contact_id, owner_id, firstname, lastname, email, created_at, last_modified_at
+    """
+    LOG.info("Running contacts dim ingest")
+    ensure_bucket_env()
+
+    client = get_client()
+    props = [
+        "hubspot_owner_id",
+        "createdate",
+        "lastmodifieddate",
+        "hs_object_id",
+        "firstname",
+        "lastname",
+        "email",
+    ]
+
+    # Full scan via GET /crm/v3/objects/contacts with pagination
+    modified_rows: List[Dict[str, Any]] = client.paginated_request(
+        method="GET",
+        endpoint="/crm/v3/objects/contacts",
+        params={
+            "properties": ",".join(props),
+            "limit": 100,
+            "archived": "false",
+        },
+        result_key="results",
+    )
+
+    if not modified_rows:
+        LOG.info("No contacts to write for dim")
+        return {"written": 0}
+
+    recs: List[Dict[str, Any]] = []
+    for r in modified_rows:
+        p = r.get("properties", {})
+        recs.append(
+            {
+                "contact_id": r.get("id"),
+                "owner_id": p.get("hubspot_owner_id"),
+                "firstname": p.get("firstname"),
+                "lastname": p.get("lastname"),
+                "email": p.get("email"),
+                "created_at": p.get("createdate"),
+                "last_modified_at": p.get("lastmodifieddate"),
+            }
+        )
+
+    df = pd.DataFrame.from_records(recs)
+    if df.empty:
+        LOG.info("No contacts to write after normalization for dim")
+        return {"written": 0}
+
+    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce")
+    df["last_modified_at"] = pd.to_datetime(
+        df["last_modified_at"], utc=True, errors="coerce"
+    )
+    path = f"s3://{S3_BUCKET}/dim/contacts/"
+    wr.s3.to_parquet(
+        df=df,
+        path=path,
+        dataset=True,
+        compression="snappy",
+        mode="overwrite",
+    )
+    LOG.info("Wrote %s contacts to %s", len(df), path)
+    return {"written": int(len(df))}

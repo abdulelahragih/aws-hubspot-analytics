@@ -13,7 +13,7 @@ LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
 
-START_DATE = os.environ.get("START_DATE", "2024-01-01")
+START_DATE = os.environ.get("START_DATE", "2025-01-01")
 S3_BUCKET = os.environ.get("S3_BUCKET")
 
 
