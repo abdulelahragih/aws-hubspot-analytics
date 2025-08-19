@@ -8,7 +8,6 @@ import pandas as pd
 from hubspot_client import get_client, utc_now_iso
 from storage import ensure_bucket_env
 
-
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
@@ -24,15 +23,14 @@ def companies_handler(_event, _context):
     to_iso = utc_now_iso()
 
     client = get_client()
-    props = ["name", "createdate", "hs_lastmodifieddate"]
-    rows: List[Dict[str, Any]] = client.search_between(
-        object_type="companies",
-        properties=props,
-        from_iso=from_iso,
-        to_iso=to_iso,
-        page_limit=100,
-        primary_prop="hs_lastmodifieddate",
-        fallback_prop="createdate",
+    props = ["name", "createdate", "hs_lastmodifieddate", "domain"]
+    rows: List[Dict[str, Any]] = client.paginated_request(
+        method="GET",
+        endpoint="/crm/v3/objects/companies",
+        params={
+            "properties": ",".join(props),
+            "limit": 100,
+        },
     )
 
     if not rows:

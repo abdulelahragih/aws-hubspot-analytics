@@ -66,14 +66,13 @@ def deals_handler(_event, _context):
         *stage_props,
     ]
 
-    rows: List[Dict[str, Any]] = client.search_between(
+    rows: List[Dict[str, Any]] = client.search_between_chunked(
         object_type="deals",
         properties=props,
         from_iso=from_iso,
         to_iso=to_iso,
-        page_limit=100,
-        primary_prop="createdate",
-        fallback_prop="createdate",
+        search_prop="createdate",
+        sort_direction="DESCENDING",
     )
 
     if not rows:

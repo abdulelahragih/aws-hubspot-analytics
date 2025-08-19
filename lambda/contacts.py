@@ -53,25 +53,21 @@ def contacts_handler(_event, _context):
     ]
 
     # Fetch by createdate
-    created_rows: List[Dict[str, Any]] = client.search_between(
+    created_rows: List[Dict[str, Any]] = client.search_between_chunked(
         object_type="contacts",
         properties=props,
         from_iso=from_iso,
         to_iso=to_iso,
-        page_limit=100,
-        primary_prop="createdate",
-        fallback_prop="lastmodifieddate",
+        search_prop="createdate",
     )
 
     # Fetch by lastmodifieddate to capture older contacts worked recently
-    modified_rows: List[Dict[str, Any]] = client.search_between(
+    modified_rows: List[Dict[str, Any]] = client.search_between_chunked(
         object_type="contacts",
         properties=props,
         from_iso=from_iso,
         to_iso=to_iso,
-        page_limit=100,
-        primary_prop="lastmodifieddate",
-        fallback_prop="createdate",
+        search_prop="lastmodifieddate",
     )
 
     by_id: Dict[str, Dict[str, Any]] = {}

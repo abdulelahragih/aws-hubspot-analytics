@@ -2,21 +2,19 @@ import os
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+from utils import parse_iso_utc
 
 import boto3
 import requests
 
-
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
-HS_BASE = "https://api.hubapi.com"
+HS_BASE_URL = "https://api.hubapi.com"
 HUBSPOT_SECRET_ARN = os.environ.get("HUBSPOT_SECRET_ARN")
-TOKEN_TTL_SECONDS = int(
-    os.environ.get("HUBSPOT_TOKEN_TTL_SECONDS", "300")
-)  # 5 minutes default
+TOKEN_TTL_SECONDS = int(os.environ.get("HUBSPOT_TOKEN_TTL_SECONDS", "300"))
 _CACHED_TOKEN: Optional[str] = None
 _CACHED_AT: float = 0.0
 
@@ -47,11 +45,6 @@ def _get_hubspot_token() -> str:
     raise RuntimeError("Secret binary not supported for HUBSPOT token")
 
 
-def hs_headers() -> Dict[str, str]:
-    token = _get_hubspot_token()
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -67,97 +60,25 @@ def to_epoch_ms(iso_str: str) -> int:
         return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def post_with_retry(
-    url: str,
-    headers: Dict[str, str],
-    payload: Dict[str, Any],
-    max_retries: int = 5,
-    base_sleep: float = 0.5,
-):
-    for attempt in range(max_retries + 1):
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
-        if r.status_code == 429 and attempt < max_retries:
-            time.sleep(base_sleep * (2**attempt))
-            continue
-        return r
-    return r
-
-
-def hs_search(
-    object_type: str,
-    properties: List[str],
-    from_iso: str,
-    to_iso: str,
-    page_limit: int = 100,
-    primary_prop: str = "hs_timestamp",
-    fallback_prop: str = "createdate",
-) -> List[Dict[str, Any]]:
-    url = f"{HS_BASE}/crm/v3/objects/{object_type}/search"
-    headers = hs_headers()
-
-    frm = to_epoch_ms(from_iso)
-    to = to_epoch_ms(to_iso)
-
-    out: List[Dict[str, Any]] = []
-    after: Optional[str] = None
-    prop = primary_prop
-    used_fallback = False
-    while True:
-        payload: Dict[str, Any] = {
-            "filterGroups": [
-                {
-                    "filters": [
-                        {
-                            "propertyName": prop,
-                            "operator": "BETWEEN",
-                            "value": str(frm),
-                            "highValue": str(to),
-                        }
-                    ]
-                }
-            ],
-            "sorts": [{"propertyName": prop, "direction": "ASCENDING"}],
-            "properties": properties,
-            "limit": page_limit,
-        }
-        if after:
-            payload["after"] = after
-        r = post_with_retry(url, headers, payload)
-        if r.status_code == 400:
-            if not used_fallback and fallback_prop and prop != fallback_prop:
-                prop = fallback_prop
-                used_fallback = True
-                continue
-            r.raise_for_status()
-        r.raise_for_status()
-        data = r.json()
-        out.extend(data.get("results", []))
-        paging = data.get("paging", {})
-        after = paging.get("next", {}).get("after")
-        if not after:
-            break
-    return out
-
-
 class HubSpotClient:
     def __init__(self, token: Optional[str] = None, rate_limit_pause: float = 0.25):
         self.token = token or _get_hubspot_token()
         if not self.token:
             raise RuntimeError("HUBSPOT_TOKEN is not configured.")
-        self.base_url = HS_BASE
+        self.base_url = HS_BASE_URL
         self.session = requests.Session()
         self.rate_limit_pause = rate_limit_pause
         self._last_req_at: float = 0.0
 
     def request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        data: Optional[Any] = None,
-        json: Optional[Dict[str, Any]] = None,
-        timeout: int = 30,
-        **kwargs: Any,
+            self,
+            method: str,
+            endpoint: str,
+            params: Optional[Dict[str, Any]] = None,
+            data: Optional[Any] = None,
+            json: Optional[Dict[str, Any]] = None,
+            timeout: int = 30,
+            **kwargs: Any,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         headers = {
@@ -184,11 +105,11 @@ class HubSpotClient:
         return resp.json() if resp.text else {}
 
     def paginated_request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        result_key: str = "results",
+            self,
+            method: str,
+            endpoint: str,
+            params: Optional[Dict[str, Any]] = None,
+            result_key: str = "results",
     ) -> List[Dict[str, Any]]:
         params = params.copy() if params else {}
         params.setdefault("limit", 100)
@@ -208,32 +129,45 @@ class HubSpotClient:
         return all_results
 
     def search_between(
-        self,
-        object_type: str,
-        properties: List[str],
-        from_iso: str,
-        to_iso: str,
-        page_limit: int = 100,
-        primary_prop: str = "hs_timestamp",
-        fallback_prop: str = "createdate",
+            self,
+            object_type: str,
+            properties: List[str],
+            from_iso: str,
+            to_iso: str,
+            page_limit: int = 100,
+            search_prop: str = "hs_createdate",
+            sort_prop: str = None,
+            sort_direction: str = "ASCENDING",
     ) -> List[Dict[str, Any]]:
-        """POST search with BETWEEN filter, 429 backoff and 400 fallback."""
+        """Search for objects of a type `object_type` between two ISO timestamps.
+        Uses POST /crm/v3/objects/{object_type}/search with a filter for the given
+        :param search_prop` between `from_iso` and `to_iso`.
+        :param object_type: Type of HubSpot object (e.g., "contacts", "deals").
+        :param properties: List of properties to fetch for each object.
+        :param from_iso: Start ISO timestamp (inclusive).
+        :param to_iso: End ISO timestamp (inclusive).
+        :param page_limit: Maximum number of results per page (default 100, max 200).
+        :param search_prop: Property to filter on (default "hs_createdate").
+        :param sort_prop: Property to sort results by (default same as `search_prop`
+        :param sort_direction: Sort direction, either "ASCENDING" or "DESCENDING".
+        """
         url = f"/crm/v3/objects/{object_type}/search"
         frm = to_epoch_ms(from_iso)
         to = to_epoch_ms(to_iso)
         out: List[Dict[str, Any]] = []
         after: Optional[str] = None
-        prop = primary_prop
-        used_fallback = False
+        sort_prop = sort_prop or search_prop
+
         # Enforce API max per-page
         page_limit = min(page_limit, 200)
+
         while True:
             payload: Dict[str, Any] = {
                 "filterGroups": [
                     {
                         "filters": [
                             {
-                                "propertyName": prop,
+                                "propertyName": search_prop,
                                 "operator": "BETWEEN",
                                 "value": str(frm),
                                 "highValue": str(to),
@@ -241,7 +175,7 @@ class HubSpotClient:
                         ]
                     }
                 ],
-                "sorts": [{"propertyName": prop, "direction": "ASCENDING"}],
+                "sorts": [{"propertyName": sort_prop, "direction": sort_direction}],
                 "properties": properties,
                 "limit": page_limit,
             }
@@ -251,26 +185,17 @@ class HubSpotClient:
             # backoff on 429
             base_sleep = 0.5
             max_retries = 5
+            data = None
             for attempt in range(max_retries + 1):
                 try:
-                    r = self.request("POST", url, json=payload, timeout=60)
-                    data = r
+                    response = self.request("POST", url, json=payload, timeout=60)
+                    data = response
                     break
                 except RuntimeError as e:
                     msg = str(e)
                     if "429" in msg and attempt < max_retries:
-                        time.sleep(base_sleep * (2**attempt))
+                        time.sleep(base_sleep * (2 ** attempt))
                         continue
-                    if (
-                        "400" in msg
-                        and not used_fallback
-                        and fallback_prop
-                        and prop != fallback_prop
-                    ):
-                        prop = fallback_prop
-                        used_fallback = True
-                        data = None
-                        break
                     if "10000" in msg or "10,000" in msg:
                         LOG.warning(
                             "Hit 10k results limit for %s; stopping pagination.",
@@ -278,17 +203,15 @@ class HubSpotClient:
                         )
                         return out
                     raise
-
-            if data is None:
-                # switched to fallback; retry loop
-                continue
+            if not data:
+                raise RuntimeError(
+                    f"Failed to fetch data for {object_type} after retries"
+                )
 
             out.extend(data.get("results", []))
             # Stop at 10k results cap
             if len(out) >= 10000:
-                LOG.warning(
-                    "Reached 10k results cap for %s; truncating results.", object_type
-                )
+                LOG.warning("Reached 10k results cap for %s", object_type)
                 return out
             next_page = (data.get("paging") or {}).get("next")
             if not next_page:
@@ -297,12 +220,119 @@ class HubSpotClient:
             time.sleep(self.rate_limit_pause)
         return out
 
+    def search_between_chunked(
+            self,
+            object_type: str,
+            properties: list,
+            from_iso: str,
+            to_iso: str,
+            search_prop: str = "hs_createdate",
+            sort_direction: str = "ASCENDING",
+            max_total_per_chunk: int = 9500,
+            max_days: int = 14,
+            min_days: int = 1,
+    ) -> list:
+        """Search for objects of a type `object_type` between two ISO timestamps
+        using a chunked approach to avoid hitting API limits.
+        This method breaks the date range into smaller chunks to ensure that
+        the total number of results does not exceed `max_total_per_chunk`.
+        :param object_type: Type of HubSpot object (e.g., "contacts", "deals").
+        :param properties: List of properties to fetch for each object.
+        :param from_iso: Start ISO timestamp (inclusive).
+        :param to_iso: End ISO timestamp (inclusive).
+        :param search_prop: Property to filter on (default "hs_createdate").
+        :param sort_direction: Sort direction, either "ASCENDING" or "DESCENDING".
+        :param max_total_per_chunk: Maximum number of results per chunk (default 9500).
+        :param max_days: Maximum number of days to try for each chunk (default 14).
+        :param min_days: Minimum number of days to try for each chunk (default 1).
+        """
+        all_results = []
+
+        def get_total(start, end):
+            payload = {
+                "filterGroups": [{
+                    "filters": [{
+                        "propertyName": search_prop,
+                        "operator": "BETWEEN",
+                        "value": str(int(start.timestamp() * 1000)),
+                        "highValue": str(int(end.timestamp() * 1000)),
+                    }]
+                }],
+                "limit": 1,
+                "properties": []
+            }
+            res = self.request(
+                method="POST",
+                endpoint=f"/crm/v3/objects/{object_type}/search",
+                json=payload
+            )
+            return res.get("total", 0)
+
+        def fetch_chunk(start, end):
+            results = []
+            after = None
+
+            while True:
+                payload = {
+                    "filterGroups": [{
+                        "filters": [{
+                            "propertyName": search_prop,
+                            "operator": "BETWEEN",
+                            "value": str(int(start.timestamp() * 1000)),
+                            "highValue": str(int(end.timestamp() * 1000)),
+                        }]
+                    }],
+                    "properties": properties,
+                    "limit": 100,
+                    "sorts": [{"propertyName": search_prop, "direction": sort_direction}]
+                }
+                if after:
+                    payload["after"] = after
+
+                res = self.request(
+                    method="POST",
+                    endpoint=f"/crm/v3/objects/{object_type}/search",
+                    json=payload
+                )
+                results.extend(res.get("results", []))
+
+                paging = res.get("paging", {})
+                after = paging.get("next", {}).get("after")
+                if not after:
+                    break
+
+            return results
+
+        start = parse_iso_utc(from_iso)
+        end = parse_iso_utc(to_iso)
+        cursor = start
+
+        while cursor < end:
+            try_days = max_days
+            while try_days >= min_days:
+                chunk_end = min(cursor + timedelta(days=try_days), end)
+                total = get_total(cursor, chunk_end)
+                if total < max_total_per_chunk:
+                    LOG.info(f"Fetching {total} results for {object_type} from {cursor.date()} to {chunk_end.date()}")
+                    chunk = fetch_chunk(cursor, chunk_end)
+                    all_results.extend(chunk)
+                    cursor = chunk_end
+                    break
+                else:
+                    LOG.warning(
+                        f"Too many results ({total}) for range {cursor.date()} to {chunk_end.date()}, shrinking...")
+                    try_days = try_days // 2
+            else:
+                raise RuntimeError(f"Could not reduce chunk below {min_days} days for {cursor}")
+
+        return all_results
+
     def batch_read_associations_v4(
-        self,
-        from_object: str,
-        to_object: str,
-        from_ids: List[str],
-        batch_size: int = 100,
+            self,
+            from_object: str,
+            to_object: str,
+            from_ids: List[str],
+            batch_size: int = 100,
     ) -> Dict[str, List[str]]:
         """Batch-read associations (v4) and return mapping from from_id -> list of to_ids.
 
@@ -313,7 +343,7 @@ class HubSpotClient:
             return association_map
         # Chunk inputs to avoid payload limits
         for i in range(0, len(from_ids), batch_size):
-            chunk = [fid for fid in from_ids[i : i + batch_size] if fid]
+            chunk = [fid for fid in from_ids[i: i + batch_size] if fid]
             if not chunk:
                 continue
             try:
@@ -340,15 +370,15 @@ class HubSpotClient:
                 frm_id = None
                 if isinstance(frm_obj, dict):
                     frm_id = (
-                        frm_obj.get("id")
-                        or frm_obj.get("objectId")
-                        or frm_obj.get("fromObjectId")
+                            frm_obj.get("id")
+                            or frm_obj.get("objectId")
+                            or frm_obj.get("fromObjectId")
                     )
                 frm_id = (
-                    frm_id
-                    or item.get("fromId")
-                    or item.get("fromObjectId")
-                    or item.get("id")
+                        frm_id
+                        or item.get("fromId")
+                        or item.get("fromObjectId")
+                        or item.get("id")
                 )
                 if not frm_id:
                     continue
@@ -358,7 +388,7 @@ class HubSpotClient:
                     for t in to_list:
                         if isinstance(t, dict):
                             tid = (
-                                t.get("id") or t.get("toObjectId") or t.get("objectId")
+                                    t.get("id") or t.get("toObjectId") or t.get("objectId")
                             )
                             if tid:
                                 collected.append(str(tid))

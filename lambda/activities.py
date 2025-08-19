@@ -8,10 +8,8 @@ from normalization import map_specific_type, extract_metadata
 from storage import ensure_bucket_env
 import awswrangler as wr
 
-
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
-
 
 START_DATE = os.environ.get("START_DATE", "2025-01-01")
 S3_BUCKET = os.environ.get("S3_BUCKET")
@@ -25,89 +23,62 @@ def activities_handler(_event, _context):
     to_iso = utc_now_iso()
 
     # Per-object properties mirroring Apps Script
-    props_by_obj = {
+    common_props = ["hs_createdate", "hs_lastmodifieddate", "hubspot_owner_id"]
+    activity_props = {
         "communications": [
             "hs_communication_channel_type",
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_body_preview",
             "hs_communication_body",
         ],
         "tasks": [
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_task_subject",
             "hs_task_body",
             "hs_task_status",
             "hs_task_type",
         ],
         "calls": [
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_call_title",
             "hs_call_body",
             "hs_call_duration",
             "hs_call_outcome",
         ],
         "meetings": [
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_meeting_title",
             "hs_meeting_body",
             "hs_meeting_outcome",
         ],
         "emails": [
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_email_subject",
-            "hs_email_text",
             "hs_email_direction",
+            "hs_email_headers"
         ],
         "notes": [
-            "hs_createdate",
-            "hs_lastmodifieddate",
-            "hubspot_owner_id",
             "hs_note_body",
         ],
     }
 
     all_rows: List[Dict[str, Any]] = []
-    prefer_prop = {
-        "emails": "createdate",
-        "notes": "createdate",
-        "tasks": "createdate",
-        "calls": "hs_timestamp",
-        "meetings": "hs_timestamp",
-        "communications": "hs_timestamp",
-    }
 
     client = get_client()
     for obj in ["emails", "calls", "meetings", "tasks", "notes", "communications"]:
         try:
-            primary = prefer_prop.get(obj, "hs_timestamp")
-            fallback = "createdate" if primary != "createdate" else "hs_timestamp"
-            res = client.search_between(
+            LOG.info(f"Fetching {obj} from {from_iso} to {to_iso}")
+            res = client.search_between_chunked(
                 object_type=obj,
-                properties=props_by_obj[obj],
+                properties=common_props + activity_props.get(obj, []),
                 from_iso=from_iso,
                 to_iso=to_iso,
-                page_limit=100,
-                primary_prop=primary,
-                fallback_prop=fallback,
+                search_prop="hs_createdate",
+                sort_direction="DESCENDING",
             )
-            # Convert each result to the engagement-like shape used in Apps Script
+
             converted = []
             for obj_row in res:
                 props = obj_row.get("properties", {})
                 created_raw = (
-                    props.get("hs_createdate")
-                    or props.get("createdate")
-                    or props.get("hs_timestamp")
+                        props.get("hs_createdate")
+                        or props.get("createdate")
+                        or props.get("hs_timestamp")
                 )
                 # normalize to epoch ms
                 created_ms = None
@@ -121,16 +92,14 @@ def activities_handler(_event, _context):
                         created_ms = to_epoch_ms(created_raw)
 
                 if obj == "communications":
-                    type_field = props.get(
-                        "hs_communication_channel_type"
-                    ) or props.get("hs_communications_channel")
+                    type_value = props.get("hs_communication_channel_type")
                 elif obj == "emails":
-                    type_field = props.get("hs_email_direction")
+                    type_value = props.get("hs_email_direction")
                 else:
-                    type_field = None
+                    type_value = None
 
                 activity_type = map_specific_type(
-                    type_field,
+                    type_value,
                     {
                         "emails": "EMAIL",
                         "calls": "CALL",
@@ -151,7 +120,7 @@ def activities_handler(_event, _context):
                                 lambda rm: (
                                     int(rm)
                                     if isinstance(rm, (int, float))
-                                    or (isinstance(rm, str) and rm.isdigit())
+                                       or (isinstance(rm, str) and rm.isdigit())
                                     else (
                                         to_epoch_ms(rm)
                                         if isinstance(rm, str)
@@ -172,120 +141,12 @@ def activities_handler(_event, _context):
             LOG.warning("%s fetch failed: %s", obj, e)
         time.sleep(0.25)
 
-    # Fallback: If CRM v3 returned no data, try V1 engagements endpoints
-    if not all_rows:
-        LOG.info("No CRM v3 activities found; attempting V1 fallback")
-
-        def _v1_convert(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            out: List[Dict[str, Any]] = []
-            for it in items:
-                eng = it.get("engagement", {})
-                if not eng:
-                    continue
-                created_ms = eng.get("createdAt")
-                try:
-                    created_ms = int(created_ms) if created_ms is not None else None
-                except Exception:
-                    created_ms = None
-                last_ms = eng.get("lastModified") or created_ms or 0
-                try:
-                    last_ms = int(last_ms)
-                except Exception:
-                    last_ms = 0
-                out.append(
-                    {
-                        "engagement": {
-                            "id": eng.get("id"),
-                            "type": eng.get("type"),
-                            "createdAt": created_ms,
-                            "lastModified": last_ms,
-                            "ownerId": eng.get("ownerId"),
-                        },
-                        "metadata": it.get("metadata") or {},
-                        "associations": {"contactIds": [], "companyIds": []},
-                    }
-                )
-            return out
-
-        start_ms = to_epoch_ms(from_iso)
-        end_ms = to_epoch_ms(to_iso)
-        now_ms = int(time.time() * 1000)
-        thirty_days_ago_ms = now_ms - 30 * 24 * 60 * 60 * 1000
-        use_recent = start_ms >= thirty_days_ago_ms
-
-        v1_items: List[Dict[str, Any]] = []
-        try:
-            if use_recent:
-                LOG.info("V1 endpoint: /recent/modified")
-                # Paginate recent/modified
-                offset = None
-                while True:
-                    params: Dict[str, Any] = {"count": 100, "since": start_ms}
-                    if offset:
-                        params["offset"] = offset
-                    data = client.request(
-                        method="GET",
-                        endpoint="/engagements/v1/engagements/recent/modified",
-                        params=params,
-                        timeout=60,
-                    )
-                    results = data.get("results", [])
-                    # Filter by createdAt range
-                    for r in results:
-                        ts = r.get("engagement", {}).get("createdAt")
-                        if isinstance(ts, str) and ts.isdigit():
-                            ts = int(ts)
-                        if isinstance(ts, (int, float)) and start_ms <= ts <= end_ms:
-                            v1_items.append(r)
-                    if not data.get("hasMore"):
-                        break
-                    offset = data.get("offset")
-            else:
-                LOG.info("V1 endpoint: /paged")
-                # Paginate paged
-                offset = 0
-                limit = 250
-                requests_without_inrange = 0
-                while True:
-                    params = {"limit": limit, "offset": offset}
-                    data = client.request(
-                        method="GET",
-                        endpoint="/engagements/v1/engagements/paged",
-                        params=params,
-                        timeout=60,
-                    )
-                    results = data.get("results", [])
-                    inrange = 0
-                    for r in results:
-                        ts = r.get("engagement", {}).get("createdAt")
-                        if isinstance(ts, str) and ts.isdigit():
-                            ts = int(ts)
-                        if isinstance(ts, (int, float)) and start_ms <= ts <= end_ms:
-                            v1_items.append(r)
-                            inrange += 1
-                    if inrange == 0:
-                        requests_without_inrange += 1
-                    else:
-                        requests_without_inrange = 0
-                    if not data.get("hasMore"):
-                        break
-                    offset = data.get("offset")
-                    # safety stop
-                    if requests_without_inrange >= 50:
-                        break
-        except Exception as e:
-            LOG.warning("V1 fallback failed: %s", e)
-
-        if v1_items:
-            converted_v1 = _v1_convert(v1_items)
-            all_rows.extend(converted_v1)
-            LOG.info("V1 fallback fetched %s activities", len(converted_v1))
-
     if not all_rows:
         LOG.info("No activities to write")
         return {"written": 0}
 
     # Convert to a flat, analytics-friendly schema
+    LOG.info("Example activity row: %s", all_rows[0] if all_rows else "None")
     df = pd.DataFrame.from_records(all_rows)
     if df.empty:
         LOG.info("No activities to write after normalization")
@@ -312,21 +173,49 @@ def activities_handler(_event, _context):
     )
     df["dt"] = df["occurred_at"].dt.strftime("%Y-%m-%d")
 
-    # Pull a few metadata fields needed for downstream categorization
     def _get_meta(dct, key):
         return dct.get(key) if isinstance(dct, dict) else None
 
+    # Email metadata for sophisticated direction detection
     df["email_direction"] = df["metadata"].apply(lambda m: _get_meta(m, "direction"))
+    df["email_sent"] = df["metadata"].apply(lambda m: _get_meta(m, "sent"))
+    df["email_subject"] = df["metadata"].apply(lambda m: _get_meta(m, "subject"))
 
-    # Select a compact set of columns for Parquet
+    # Note metadata for LinkedIn/WhatsApp detection
+    df["note_subject"] = df["metadata"].apply(lambda m: _get_meta(m, "subject"))
+    df["note_body"] = df["metadata"].apply(lambda m: _get_meta(m, "body"))
+
+    # Communication metadata for source-based mapping
+    df["communication_source"] = df["metadata"].apply(lambda m: _get_meta(m, "source"))
+    df["communication_body"] = df["metadata"].apply(lambda m: _get_meta(m, "body"))
+
+    # Task/Call/Meeting metadata
+    df["task_subject"] = df["metadata"].apply(lambda m: _get_meta(m, "subject"))
+    df["call_title"] = df["metadata"].apply(lambda m: _get_meta(m, "subject"))
+    df["meeting_title"] = df["metadata"].apply(lambda m: _get_meta(m, "subject"))
+
+    # Select columns for Parquet (expanded for Google Apps Script-style mapping)
     out_cols = [
         "activity_id",
         "activity_type",
         "owner_id",
         "occurred_at",
         "last_modified_at",
-        "email_direction",
         "dt",
+        # Email metadata for sophisticated direction detection
+        "email_direction",
+        "email_sent",
+        "email_subject",
+        # Note metadata for LinkedIn/WhatsApp detection
+        "note_subject",
+        "note_body",
+        # Communication metadata for source-based mapping
+        "communication_source",
+        "communication_body",
+        # Other activity metadata
+        "task_subject",
+        "call_title",
+        "meeting_title",
     ]
     out_df = df[out_cols].copy()
 

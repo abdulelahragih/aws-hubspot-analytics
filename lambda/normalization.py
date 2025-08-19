@@ -1,5 +1,4 @@
 from typing import Any, Dict, List
-
 import pandas as pd
 
 
@@ -26,15 +25,15 @@ def normalize_deals(rows: List[Dict[str, Any]]) -> pd.DataFrame:
 
 
 def normalize_activities(
-    object_type: str, rows: List[Dict[str, Any]]
+        object_type: str, rows: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
     mapped: List[Dict[str, Any]] = []
     for item in rows:
         props = item.get("properties", {})
         occurred = (
-            props.get("hs_timestamp")
-            or props.get("createdate")
-            or props.get("hs_createdate")
+                props.get("hs_timestamp")
+                or props.get("createdate")
+                or props.get("hs_createdate")
         )
         owner_id = props.get("hubspot_owner_id") or props.get("hs_created_by")
         channel = props.get("hs_communications_channel") or props.get("hs_channel")
@@ -78,16 +77,17 @@ def normalize_activities(
     return mapped
 
 
-def map_specific_type(value: Any, default_type: str) -> str:
-    if not value:
+def map_specific_type(field_value: str, default_type: str) -> str:
+    if not field_value:
         return default_type
-    v = str(value).strip().upper()
 
-    if v == "INCOMING_EMAIL":
+    # Email direction mapping
+    if field_value == "INCOMING_EMAIL":
         return "INCOMING_EMAIL"
-    if v == "FORWARDED_EMAIL":
+    if field_value == "FORWARDED_EMAIL":
         return "FORWARDED_EMAIL"
 
+    # Communication channel mapping
     channel_map = {
         "EMAIL": "EMAIL",
         "INCOMING_EMAIL": "INCOMING_EMAIL",
@@ -100,7 +100,8 @@ def map_specific_type(value: Any, default_type: str) -> str:
         "TASK": "TASK",
         "NOTE": "NOTE",
     }
-    return channel_map.get(v, default_type)
+
+    return channel_map.get(field_value, default_type)
 
 
 def extract_metadata(props: Dict[str, Any], object_type: str) -> Dict[str, Any]:
