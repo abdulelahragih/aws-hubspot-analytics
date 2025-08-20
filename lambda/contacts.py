@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 import awswrangler as wr
 import pandas as pd
 
+from utils import _parse_hs_datetime
 from hubspot_client import get_client, utc_now_iso
 from storage import ensure_bucket_env
 
@@ -152,7 +153,7 @@ def contacts_dim_handler(_event, _context):
     ]
 
     # Full scan via GET /crm/v3/objects/contacts with pagination
-    modified_rows: List[Dict[str, Any]] = client.paginated_request(
+    contacts: List[Dict[str, Any]] = client.paginated_request(
         method="GET",
         endpoint="/crm/v3/objects/contacts",
         params={
@@ -163,22 +164,22 @@ def contacts_dim_handler(_event, _context):
         result_key="results",
     )
 
-    if not modified_rows:
+    if not contacts:
         LOG.info("No contacts to write for dim")
         return {"written": 0}
 
     recs: List[Dict[str, Any]] = []
-    for r in modified_rows:
-        p = r.get("properties", {})
+    for contact in contacts:
+        p = contact.get("properties", {})
         recs.append(
             {
-                "contact_id": r.get("id"),
+                "contact_id": contact.get("id"),
                 "owner_id": p.get("hubspot_owner_id"),
                 "firstname": p.get("firstname"),
                 "lastname": p.get("lastname"),
                 "email": p.get("email"),
-                "created_at": p.get("createdate"),
-                "last_modified_at": p.get("lastmodifieddate"),
+                "created_at": _parse_hs_datetime(p.get("createdate")),
+                "last_modified_at": _parse_hs_datetime(p.get("lastmodifieddate")),
             }
         )
 
@@ -187,17 +188,14 @@ def contacts_dim_handler(_event, _context):
         LOG.info("No contacts to write after normalization for dim")
         return {"written": 0}
 
-    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce")
-    df["last_modified_at"] = pd.to_datetime(
-        df["last_modified_at"], utc=True, errors="coerce"
-    )
+    df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
     path = f"s3://{S3_BUCKET}/dim/contacts/"
     wr.s3.to_parquet(
         df=df,
         path=path,
         dataset=True,
         compression="snappy",
-        mode="overwrite",
+        partition_cols=["dt"],
     )
     LOG.info("Wrote %s contacts to %s", len(df), path)
     return {"written": int(len(df))}
