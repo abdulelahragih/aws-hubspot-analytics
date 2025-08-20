@@ -1,19 +1,52 @@
 import logging
 import os
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 import awswrangler as wr
 import pandas as pd
 
+from utils import _parse_hs_datetime
 from hubspot_client import get_client, utc_now_iso
 from storage import ensure_bucket_env
-
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
-START_DATE = os.environ.get("START_DATE", "2025-01-01")
 S3_BUCKET = os.environ.get("S3_BUCKET")
+
+STG = {
+    "op": "appointmentscheduled",
+    "prep": "1067388789",
+    "sent": "presentationscheduled",
+    "won": "closedwon",
+    "lost": "closedlost",
+}
+
+BASE_PROPS = [
+    "dealname",
+    "dealstage",
+    "hubspot_owner_id",
+    "amount",
+    "createdate",
+    "closedate",
+]
+
+STAGE_PROPS: List[str] = []
+for sid in STG.values():
+    STAGE_PROPS.extend([f"hs_date_entered_{sid}", f"hs_v2_date_entered_{sid}"])
+
+SOURCE_PROPS = [
+    "deal_source",
+    "source",
+    "lead_source",
+    "hs_analytics_source",
+    "hs_analytics_source_data_1",
+]
+
+ALL_PROPS = [*BASE_PROPS, *STAGE_PROPS, *SOURCE_PROPS]
+
+SOURCE_KEY_RE = re.compile(r"(source|type|origin)", re.IGNORECASE)
 
 
 def _pick_first(*values: Any) -> Any:
@@ -21,6 +54,26 @@ def _pick_first(*values: Any) -> Any:
         if v not in (None, ""):
             return v
     return None
+
+
+def _get_associations_id(associations, association_key: str) -> Optional[str]:
+    """Helper to get the first association ID from a list of associations."""
+    if not associations:
+        return None
+
+    results = associations.get(association_key, {}).get("results", [])
+    if not results:
+        return None
+    # Return the first ID from the results
+    return results[0].get("id")
+
+
+def _stage_ts(props: Dict[str, Any], code: str) -> Optional[pd.Timestamp]:
+    """
+    JS precedence: hs_v2_date_entered_* OR hs_date_entered_* (parse ms or ISO)
+    """
+    v = props.get(f"hs_v2_date_entered_{code}") or props.get(f"hs_date_entered_{code}")
+    return _parse_hs_datetime(v)
 
 
 def deals_handler(_event, _context):
@@ -32,179 +85,71 @@ def deals_handler(_event, _context):
     LOG.info("Running raw deals ingest")
     ensure_bucket_env()
 
-    from_iso = os.environ.get("DEALS_RAW_FROM", START_DATE)
-    to_iso = utc_now_iso()
-
     client = get_client()
-    # Stage IDs (match Apps Script constants)
-    STG = {
-        "op": "appointmentscheduled",
-        "prep": "1067388789",  # custom stage id for Proposal Prep
-        "sent": "presentationscheduled",
-        "won": "closedwon",
-        "lost": "closedlost",
-    }
-    stage_props = []
-    for sid in STG.values():
-        stage_props.append(f"hs_date_entered_{sid}")
-        stage_props.append(f"hs_v2_date_entered_{sid}")
 
-    props = [
-        "dealname",
-        "dealstage",
-        "hubspot_owner_id",
-        "amount",
-        "createdate",
-        "hs_lastmodifieddate",
-        "closedate",
-        # sources
-        "deal_source",
-        "source",
-        "lead_source",
-        "hs_analytics_source",
-        "hs_analytics_source_data_1",
-        *stage_props,
-    ]
-
-    rows: List[Dict[str, Any]] = client.search_between_chunked(
-        object_type="deals",
-        properties=props,
-        from_iso=from_iso,
-        to_iso=to_iso,
-        search_prop="createdate",
-        sort_direction="DESCENDING",
+    result: List[Dict[str, Any]] = client.paginated_request(
+        method="GET",
+        endpoint="/crm/v3/objects/deals",
+        params={
+            "properties": ",".join(ALL_PROPS),
+            "limit": 100,
+            "associations": "company,contact",
+        },
     )
 
-    if not rows:
+    if not result:
         LOG.info("No deals to write")
         return {"written": 0}
 
-    records: List[Dict[str, Any]] = []
-    deal_ids: List[str] = []
-    for d in rows:
-        p = d.get("properties", {})
-        if d.get("id"):
-            deal_ids.append(str(d.get("id")))
+    deals: List[Dict[str, Any]] = []
+    for deal in result:
+        properties = deal.get("properties", {})
+        associations = deal.get("associations", {})
+        company_id = _get_associations_id(associations, "companies")
+        contact_id = _get_associations_id(associations, "contacts")
+        parsed_deal = {
+            "deal_id": deal.get("id"),
+            "deal_name": properties.get("dealname", ""),
+            "owner_id": properties.get("hubspot_owner_id"),
+            "company_id": company_id,
+            "contact_id": contact_id,
+            "deal_stage": properties.get("dealstage"),
+            "created_at": _parse_hs_datetime(properties.get("createdate")),
+            "closed_at": _parse_hs_datetime(properties.get("closedate")),
+            "last_modified_at": _parse_hs_datetime(properties.get("hs_lastmodifieddate")),
+            "amount": properties.get("amount"),
+            # stage dates in ms
+            "op_detected_at": _stage_ts(properties, STG["op"]),
+            "proposal_prep_at": _stage_ts(properties, STG["prep"]),
+            "proposal_sent_at": _stage_ts(properties, STG["sent"]),
+            "closed_won_at": _stage_ts(properties, STG["won"]),
+            "closed_lost_at": _stage_ts(properties, STG["lost"]),
+            # sources
+            "source": _pick_first(
+                properties.get("deal_source"),
+                properties.get("source"),
+                properties.get("lead_source"),
+                properties.get("hs_analytics_source"),
+                properties.get("hs_analytics_source_data_1"),
+            ),
+            "updated_at": pd.Timestamp.now(tz="UTC"),
+        }
+        deals.append(parsed_deal)
 
-        # Stage dates helper
-        def _stage_ms(code: str) -> int | None:
-            v = p.get(f"hs_v2_date_entered_{code}") or p.get(f"hs_date_entered_{code}")
-            if v is None:
-                return None
-            try:
-                sv = str(v)
-                if sv.isdigit():
-                    return int(sv)
-                ts = pd.to_datetime(sv, utc=True, errors="coerce")
-                if pd.isna(ts):
-                    return None
-                return int(ts.value // 10**6)
-            except Exception:
-                return None
-
-        records.append(
-            {
-                "deal_id": d.get("id"),
-                "deal_name": p.get("dealname"),
-                "owner_id": p.get("hubspot_owner_id"),
-                "dealstage": p.get("dealstage"),
-                "created_at": p.get("createdate"),
-                "closed_at": p.get("closedate"),
-                "last_modified_at": p.get("hs_lastmodifieddate"),
-                "amount": p.get("amount"),
-                # stage dates in ms
-                "op_detected_ms": _stage_ms(STG["op"]),
-                "proposal_prep_ms": _stage_ms(STG["prep"]),
-                "proposal_sent_ms": _stage_ms(STG["sent"]),
-                "closed_won_ms": _stage_ms(STG["won"]),
-                "closed_lost_ms": _stage_ms(STG["lost"]),
-                # sources
-                "source_primary": _pick_first(
-                    p.get("deal_source"),
-                    p.get("source"),
-                    p.get("lead_source"),
-                    p.get("hs_analytics_source"),
-                ),
-                "source_secondary": p.get("hs_analytics_source_data_1"),
-            }
-        )
-
-    # Resolve companies via associations v4 (deals -> companies)
-    company_map: Dict[str, List[str]] = {}
-    contact_map: Dict[str, List[str]] = {}
-    try:
-        if deal_ids:
-            company_map = client.batch_read_associations_v4(
-                from_object="deals", to_object="companies", from_ids=deal_ids
-            )
-            contact_map = client.batch_read_associations_v4(
-                from_object="deals", to_object="contacts", from_ids=deal_ids
-            )
-    except Exception as e:
-        LOG.warning("Skipping company association enrichment: %s", e)
-
-    df = pd.DataFrame.from_records(records)
+    df = pd.DataFrame.from_records(deals)
     if df.empty:
         LOG.info("No deals to write after normalization")
         return {"written": 0}
 
-    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce")
-    df["closed_at"] = pd.to_datetime(df["closed_at"], utc=True, errors="coerce")
-    df["last_modified_at"] = pd.to_datetime(
-        df["last_modified_at"], utc=True, errors="coerce"
-    )
-
-    # Convert ms to timestamps
-    for col in [
-        "op_detected_ms",
-        "proposal_prep_ms",
-        "proposal_sent_ms",
-        "closed_won_ms",
-        "closed_lost_ms",
-    ]:
-        out_col = col.replace("_ms", "_at")
-        df[out_col] = pd.to_datetime(df[col], unit="ms", utc=True, errors="coerce")
-
     df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
-
-    # Attach first associated company_id if present
-    if not df.empty:
-        df["company_id"] = df["deal_id"].map(
-            lambda did: (company_map.get(str(did)) or [None])[0]
-        )
-        df["contact_id"] = df["deal_id"].map(
-            lambda did: (contact_map.get(str(did)) or [None])[0]
-        )
-
-    out_cols = [
-        "deal_id",
-        "deal_name",
-        "company_id",
-        "contact_id",
-        "owner_id",
-        "dealstage",
-        "created_at",
-        "closed_at",
-        "last_modified_at",
-        "amount",
-        "op_detected_at",
-        "proposal_prep_at",
-        "proposal_sent_at",
-        "closed_won_at",
-        "closed_lost_at",
-        "source_primary",
-        "source_secondary",
-        "dt",
-    ]
-    out_df = df[out_cols].copy()
 
     path = f"s3://{S3_BUCKET}/curated/deals/"
     wr.s3.to_parquet(
-        df=out_df,
+        df=df,
         path=path,
         dataset=True,
         compression="snappy",
         partition_cols=["dt"],
     )
-    LOG.info("Wrote %s raw deal rows to %s", len(out_df), path)
-    return {"written": int(len(out_df))}
+    LOG.info("Wrote %s raw deal rows to %s", len(df), path)
+    return {"written": int(len(df))}
