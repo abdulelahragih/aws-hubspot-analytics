@@ -4,7 +4,7 @@ WITH ranked AS (
     d.*,
     ROW_NUMBER() OVER (
       PARTITION BY deal_id
-      ORDER BY COALESCE(last_modified_at, created_at) DESC
+      ORDER BY created_at DESC
     ) AS rn
   FROM hubspot_datalake.deals d
 )
@@ -14,7 +14,7 @@ SELECT
   company_id,
   contact_id,
   owner_id,
-  dealstage,
+  deal_stage,
   created_at,
   closed_at,
   last_modified_at,
@@ -24,8 +24,8 @@ SELECT
   proposal_sent_at,
   closed_won_at,
   closed_lost_at,
-  source_primary,
-  source_secondary,
+  source,
+  updated_at,
   dt
 FROM ranked
 WHERE rn = 1;
