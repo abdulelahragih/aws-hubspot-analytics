@@ -180,7 +180,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       value: hubspotSecret.secretName,
     });
 
-    // === Glue Data Catalog: Database (L1) + Crawler to discover curated schemas ===
+    // === Glue Data Catalog: Database + Crawler to discover curated schemas ===
     const glueDbName = "hubspot_datalake";
     new glue.CfnDatabase(this, "HubspotDataLakeDb", {
       catalogId: cdk.Stack.of(this).account,
@@ -208,11 +208,11 @@ export class HubspotAnalyticsStack extends cdk.Stack {
         deleteBehavior: "LOG",
       },
       recrawlPolicy: { recrawlBehavior: "CRAWL_EVERYTHING" },
-      // optional schedule example (commented): cron(0 2 * * ? *)
+      // optional schedule example: cron(0 2 * * ? *)
       // schedule: { scheduleExpression: "cron(0 2 * * ? *)" },
     });
 
-    // Optional: separate crawler for dimension tables under s3://.../dim/
+    // separate crawler for dimension tables under s3://.../dim/
     const dimTargets = [
       { path: `s3://${bucket.bucketName}/dim/owners/` },
       { path: `s3://${bucket.bucketName}/dim/stage/` },
