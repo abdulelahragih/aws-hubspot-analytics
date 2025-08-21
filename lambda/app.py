@@ -3,7 +3,7 @@ import logging
 
 from activities import activities_handler
 from deals import deals_handler
-from owners_dim import owners_dim_handler
+from owners import owners_handler
 from companies import companies_handler
 from contacts import contacts_handler
 from pipelines_dim import pipelines_dim_handler
@@ -24,8 +24,8 @@ def handler(event, context):
         return activities_handler(event, context)
     if task == "deals":
         return deals_handler(event, context)
-    if task == "owners_dim":
-        return owners_dim_handler(event, context)
+    if task == "owners":
+        return owners_handler(event, context)
     if task == "companies":
         return companies_handler(event, context)
     if task == "contacts":

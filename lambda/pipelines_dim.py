@@ -20,8 +20,7 @@ def pipelines_dim_handler(_event, _context):
     ensure_bucket_env()
     client = get_client()
 
-    # Pipelines API
-    data: Dict[str, Any] = client.request(
+    data = client.request(
         method="GET",
         endpoint="/crm/v3/pipelines/deals",
     )

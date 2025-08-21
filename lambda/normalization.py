@@ -108,34 +108,34 @@ def extract_metadata(props: Dict[str, Any], object_type: str) -> Dict[str, Any]:
     p = props or {}
     if object_type == "communications":
         return {
-            "body": p.get("hs_communication_body") or p.get("hs_body_preview") or "",
-            "source": "CRM_v3_Communications",
+            "communication_body": p.get("hs_communication_body") or p.get("hs_body_preview") or "",
+            "communication_source": "CRM_v3_Communications",
         }
     if object_type == "tasks":
         return {
-            "subject": p.get("hs_task_subject") or "",
-            "body": p.get("hs_task_body") or "",
-            "status": p.get("hs_task_status") or "",
+            "task_subject": p.get("hs_task_subject") or "",
+            "task_body": p.get("hs_task_body") or "",
+            "task_status": p.get("hs_task_status") or "",
         }
     if object_type == "calls":
         return {
-            "subject": p.get("hs_call_title") or "",
-            "body": p.get("hs_call_body") or "",
-            "duration": p.get("hs_call_duration") or "",
-            "outcome": p.get("hs_call_outcome") or "",
+            "call_title": p.get("hs_call_title") or "",
+            "call_body": p.get("hs_call_body") or "",
+            "call_duration": p.get("hs_call_duration") or "",
+            "call_outcome": p.get("hs_call_outcome") or "",
         }
     if object_type == "meetings":
         return {
-            "subject": p.get("hs_meeting_title") or "",
-            "body": p.get("hs_meeting_body") or "",
-            "outcome": p.get("hs_meeting_outcome") or "",
+            "meeting_title": p.get("hs_meeting_title") or "",
+            "meeting_body": p.get("hs_meeting_body") or "",
+            "meeting_outcome": p.get("hs_meeting_outcome") or "",
         }
     if object_type == "emails":
         return {
-            "subject": p.get("hs_email_subject") or "",
-            "body": p.get("hs_email_text") or "",
-            "direction": p.get("hs_email_direction") or "",
+            "email_subject": p.get("hs_email_subject") or "",
+            "email_body": p.get("hs_email_text") or "",
+            "email_direction": p.get("hs_email_direction") or "",
         }
     if object_type == "notes":
-        return {"body": p.get("hs_note_body") or ""}
-    return {"body": ""}
+        return {"note_body": p.get("hs_note_body") or ""}
+    return {}

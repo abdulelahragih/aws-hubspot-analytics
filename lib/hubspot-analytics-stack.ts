@@ -79,20 +79,20 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       }
     );
 
-    const ownersDimFn = new lambda.DockerImageFunction(this, "OwnersDimFn", {
+    const ownersFn = new lambda.DockerImageFunction(this, "OwnersFn", {
       code: activitiesCode,
       memorySize: 1024,
       timeout: cdk.Duration.minutes(5),
       environment: {
         S3_BUCKET: bucket.bucketName,
         HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-        TASK: "owners_dim",
+        TASK: "owners",
       },
     });
 
-    const companiesDimFn = new lambda.DockerImageFunction(
+    const companiesFn = new lambda.DockerImageFunction(
       this,
-      "CompaniesDimFn",
+      "CompaniesFn",
       {
         code: activitiesCode,
         memorySize: 1536,
@@ -140,16 +140,16 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     bucket.grantReadWrite(dealsFn);
     bucket.grantReadWrite(activitiesFn);
     bucket.grantReadWrite(contactsFn);
-    bucket.grantReadWrite(ownersDimFn);
-    bucket.grantReadWrite(companiesDimFn);
+    bucket.grantReadWrite(ownersFn);
+    bucket.grantReadWrite(companiesFn);
     bucket.grantReadWrite(pipelinesDimFn);
     bucket.grantReadWrite(contactsDimFn);
 
     hubspotSecret.grantRead(dealsFn);
     hubspotSecret.grantRead(activitiesFn);
     hubspotSecret.grantRead(contactsFn);
-    hubspotSecret.grantRead(ownersDimFn);
-    hubspotSecret.grantRead(companiesDimFn);
+    hubspotSecret.grantRead(ownersFn);
+    hubspotSecret.grantRead(companiesFn);
     hubspotSecret.grantRead(pipelinesDimFn);
     hubspotSecret.grantRead(contactsDimFn);
 
@@ -164,11 +164,11 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       value: contactsFn.functionName,
     });
 
-    new cdk.CfnOutput(this, "OwnersDimFunctionName", {
-      value: ownersDimFn.functionName,
+    new cdk.CfnOutput(this, "OwnersFunctionName", {
+      value: ownersFn.functionName,
     });
-    new cdk.CfnOutput(this, "CompaniesDimFunctionName", {
-      value: companiesDimFn.functionName,
+    new cdk.CfnOutput(this, "CompaniesFunctionName", {
+      value: companiesFn.functionName,
     });
     new cdk.CfnOutput(this, "PipelinesDimFunctionName", {
       value: pipelinesDimFn.functionName,

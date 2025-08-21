@@ -61,7 +61,12 @@ def companies_handler(_event, _context):
 
     path = f"s3://{S3_BUCKET}/dim/companies/"
     wr.s3.to_parquet(
-        df=df, path=path, dataset=True, compression="snappy", partition_cols=["dt"]
+        df=df,
+        path=path,
+        dataset=True,
+        compression="snappy",
+        partition_cols=["dt"],
+        mode="overwrite_partitions",
     )
     LOG.info("Wrote %s companies to %s", len(df), path)
     return {"written": int(len(df))}

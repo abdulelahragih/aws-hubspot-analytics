@@ -131,8 +131,7 @@ def deals_handler(_event, _context):
                 properties.get("lead_source"),
                 properties.get("hs_analytics_source"),
                 properties.get("hs_analytics_source_data_1"),
-            ),
-            "updated_at": pd.Timestamp.now(tz="UTC"),
+            )
         }
         deals.append(parsed_deal)
 
@@ -142,14 +141,17 @@ def deals_handler(_event, _context):
         return {"written": 0}
 
     df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
-
+    out_df = df.drop_duplicates(
+        keep="last"
+    )
     path = f"s3://{S3_BUCKET}/curated/deals/"
     wr.s3.to_parquet(
-        df=df,
+        df=out_df,
         path=path,
         dataset=True,
         compression="snappy",
         partition_cols=["dt"],
+        mode="overwrite_partitions",
     )
     LOG.info("Wrote %s raw deal rows to %s", len(df), path)
     return {"written": int(len(df))}

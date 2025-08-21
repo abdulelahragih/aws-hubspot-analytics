@@ -196,6 +196,7 @@ def contacts_dim_handler(_event, _context):
         dataset=True,
         compression="snappy",
         partition_cols=["dt"],
+        mode="overwrite_partitions",
     )
     LOG.info("Wrote %s contacts to %s", len(df), path)
     return {"written": int(len(df))}

@@ -1,8 +1,13 @@
+import logging
 from datetime import datetime, timezone
 from typing import Optional, Any
 
 import pandas as pd
 from dateutil.parser import isoparse
+import awswrangler as wr
+
+LOG = logging.getLogger(__name__)
+LOG.setLevel(logging.INFO)
 
 
 def parse_iso_utc(s: str) -> datetime:
@@ -38,3 +43,15 @@ def _parse_hs_datetime(v: Any) -> Optional[pd.Timestamp]:
             return None
     ts = pd.to_datetime(sv, utc=True, errors="coerce")
     return None if pd.isna(ts) else ts
+
+
+def read_parquet(path: str) -> Optional[pd.DataFrame]:
+    """
+    Read a Parquet file from S3 and return a DataFrame.
+    """
+    try:
+        df = wr.s3.read_parquet(path=path, dataset=True, dtype_backend="pyarrow")
+        return df
+    except Exception as e:
+        LOG.error(f"Failed to read Parquet from {path}: {e}")
+        return None
