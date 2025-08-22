@@ -9,3 +9,4 @@ cdk.out
 google-scripts/
 .venv/
 .idea/
+__pycache__/
