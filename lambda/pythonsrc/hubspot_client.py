@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
-from utils import parse_iso_utc
+from helpers.utils import parse_iso_utc
 
 import boto3
 import requests
@@ -43,11 +43,6 @@ def _get_hubspot_token() -> str:
         _CACHED_AT = now
         return _CACHED_TOKEN or ""
     raise RuntimeError("Secret binary not supported for HUBSPOT token")
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
 def to_epoch_ms(iso_str: str) -> int:
     try:

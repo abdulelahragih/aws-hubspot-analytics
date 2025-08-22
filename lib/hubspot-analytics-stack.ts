@@ -33,15 +33,12 @@ export class HubspotAnalyticsStack extends cdk.Stack {
 
         // Python Lambda packaged as a Docker container image
         const dockerPath = path.resolve(__dirname, "..", "lambda");
-        const dealsCode = lambda.DockerImageCode.fromImageAsset(dockerPath, {
-            cmd: ["app.handler"],
-        });
-        const activitiesCode = lambda.DockerImageCode.fromImageAsset(dockerPath, {
+        const dockerCode = lambda.DockerImageCode.fromImageAsset(dockerPath, {
             cmd: ["app.handler"],
         });
 
         const dealsFn = new lambda.DockerImageFunction(this, "DealsIngestFn", {
-            code: dealsCode,
+            code: dockerCode,
             memorySize: 2048,
             timeout: cdk.Duration.minutes(15),
             environment: {
@@ -56,7 +53,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
             this,
             "ActivitiesIngestFn",
             {
-                code: activitiesCode,
+                code: dockerCode,
                 memorySize: 2048,
                 timeout: cdk.Duration.minutes(15),
                 environment: {
@@ -72,7 +69,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
             this,
             "ContactsIngestFn",
             {
-                code: activitiesCode,
+                code: dockerCode,
                 memorySize: 2048,
                 timeout: cdk.Duration.minutes(15),
                 environment: {
@@ -85,7 +82,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
         );
 
         const ownersFn = new lambda.DockerImageFunction(this, "OwnersFn", {
-            code: activitiesCode,
+            code: dockerCode,
             memorySize: 1024,
             timeout: cdk.Duration.minutes(5),
             environment: {
@@ -96,7 +93,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
         });
 
         const companiesFn = new lambda.DockerImageFunction(this, "CompaniesFn", {
-            code: activitiesCode,
+            code: dockerCode,
             memorySize: 1536,
             timeout: cdk.Duration.minutes(10),
             environment: {
@@ -111,7 +108,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
             this,
             "PipelinesDimFn",
             {
-                code: activitiesCode,
+                code: dockerCode,
                 memorySize: 1024,
                 timeout: cdk.Duration.minutes(5),
                 environment: {
@@ -126,7 +123,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
             this,
             "ContactsDimFn",
             {
-                code: activitiesCode,
+                code: dockerCode,
                 memorySize: 1536,
                 timeout: cdk.Duration.minutes(10),
                 environment: {

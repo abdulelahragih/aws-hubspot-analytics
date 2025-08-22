@@ -5,9 +5,10 @@ from typing import Any, Dict, List
 import awswrangler as wr
 import pandas as pd
 
-from utils import _parse_hs_datetime
-from hubspot_client import get_client, utc_now_iso
-from storage import ensure_bucket_env
+from helpers.utils import _parse_hs_datetime
+from hubspot_client import get_client
+from helpers.utils import utc_now_iso
+from helpers.storage import ensure_bucket_env
 
 
 LOG = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def contacts_handler(_event, _context):
     return {"written": int(len(out_df))}
 
 
-def contacts_dim_handler(_event, _context):
+def contacts_handler(_event, _context):
     """Ingest contacts as a dimension table with basic attributes.
 
     Output: s3://{bucket}/dim/contacts/ as a single, non-partitioned snapshot (overwrite each run)

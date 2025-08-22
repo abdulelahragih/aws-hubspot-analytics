@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 import awswrangler as wr
 import pandas as pd
 
-from utils import _parse_hs_datetime
-from hubspot_client import get_client, utc_now_iso
-from storage import ensure_bucket_env
+from helpers.utils import _parse_hs_datetime
+from hubspot_client import get_client
+from helpers.storage import ensure_bucket_env
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)

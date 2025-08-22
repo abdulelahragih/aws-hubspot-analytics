@@ -6,8 +6,7 @@ import awswrangler as wr
 import pandas as pd
 
 from hubspot_client import get_client
-from storage import ensure_bucket_env
-
+from helpers.storage import ensure_bucket_env
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)

@@ -9,6 +9,8 @@ import awswrangler as wr
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def parse_iso_utc(s: str) -> datetime:
     """Parse ISO/date-only to an aware UTC datetime."""
@@ -55,3 +57,10 @@ def read_parquet(path: str) -> Optional[pd.DataFrame]:
     except Exception as e:
         LOG.error(f"Failed to read Parquet from {path}: {e}")
         return None
+
+if __name__ == "__main__":
+    # Example usage
+    print(utc_now_iso())
+    print(parse_iso_utc(utc_now_iso()).date())
+    dt = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    print(dt)

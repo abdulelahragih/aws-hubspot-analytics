@@ -1,7 +1,6 @@
 from typing import Any, Dict, List
 import pandas as pd
 
-
 def normalize_deals(rows: List[Dict[str, Any]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()

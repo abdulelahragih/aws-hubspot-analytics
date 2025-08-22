@@ -53,6 +53,13 @@ def owners_handler(_event, _context):
         df = pd.DataFrame.from_records(owners)
         path = f"s3://{S3_BUCKET}/dim/owners/"
 
+        # Delete existing data before saving
+        try:
+            wr.s3.delete_objects(path=path)
+            LOG.info("Deleted existing owners data from %s", path)
+        except Exception as e:
+            LOG.warning("Could not delete existing data (may not exist): %s", e)
+
         wr.s3.to_parquet(
             df=df,
             path=path,

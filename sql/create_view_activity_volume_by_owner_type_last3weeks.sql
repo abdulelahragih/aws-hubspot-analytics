@@ -54,7 +54,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			CAST(
 				date_trunc(
 					'week',
-					at_timezone(a.occurred_at, 'America/Santiago')
+					at_timezone(a.created_at, 'America/Santiago')
 				) AS date
 			) week_start,
 			(
@@ -91,22 +91,8 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 					WHEN (upper(a.activity_type) = 'TASK') THEN 'Task'
 					WHEN (upper(a.activity_type) = 'NOTE') THEN (
 						CASE
-							WHEN (
-								(
-									lower(COALESCE(a.note_subject, '')) LIKE '%linkedin%'
-								)
-								OR (
-									lower(COALESCE(a.note_body, '')) LIKE '%linkedin%'
-								)
-							) THEN 'LinkedIn Message'
-							WHEN (
-								(
-									lower(COALESCE(a.note_subject, '')) LIKE '%whatsapp%'
-								)
-								OR (
-									lower(COALESCE(a.note_body, '')) LIKE '%whatsapp%'
-								)
-							) THEN 'WhatsApp' ELSE 'Note'
+							WHEN ((lower(COALESCE(a.note_body, '')) LIKE '%linkedin%') OR lower(COALESCE(a.communication_body, '')) LIKE '%linkedin%') THEN 'LinkedIn Message'
+							WHEN ((lower(COALESCE(a.note_body, '')) LIKE '%whatsapp%') OR lower(COALESCE(a.communication_body, '')) LIKE '%whatsapp%') THEN 'WhatsApp' ELSE 'Note'
 						END
 					) ELSE (
 						CASE
@@ -131,7 +117,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CAST(
 					date_trunc(
 						'week',
-						at_timezone(a.occurred_at, 'America/Santiago')
+						at_timezone(a.created_at, 'America/Santiago')
 					) AS date
 				) BETWEEN db.first_week_start AND db.last_week_end
 				AND (
@@ -153,7 +139,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			'Contact created' activity_category
 		FROM (
 				(
-					hubspot_datalake.contacts c
+					hubspot_datalake.contacts_75c422d9e8feb7b640a834d7f98a57f8 c
 					INNER JOIN date_bounds db ON true
 				)
 				INNER JOIN allowed_owners ao ON (ao.owner_id = c.owner_id)
@@ -178,7 +164,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			'Contact worked' activity_category
 		FROM (
 				(
-					hubspot_datalake.contacts c
+					hubspot_datalake.contacts_75c422d9e8feb7b640a834d7f98a57f8 c
 					INNER JOIN date_bounds db ON true
 				)
 				INNER JOIN allowed_owners ao ON (ao.owner_id = c.owner_id)

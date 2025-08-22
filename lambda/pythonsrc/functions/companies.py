@@ -1,12 +1,13 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import awswrangler as wr
 import pandas as pd
 
-from hubspot_client import get_client, utc_now_iso
-from storage import ensure_bucket_env
+from hubspot_client import get_client
+from helpers.utils import utc_now_iso
+from helpers.storage import ensure_bucket_env
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
@@ -18,9 +19,6 @@ S3_BUCKET = os.environ.get("S3_BUCKET")
 def companies_handler(_event, _context):
     """Ingest companies as a dimension (id, name, created, last modified)."""
     ensure_bucket_env()
-
-    from_iso = os.environ.get("COMPANIES_FROM", START_DATE)
-    to_iso = utc_now_iso()
 
     client = get_client()
     props = ["name", "createdate", "hs_lastmodifieddate", "domain"]
