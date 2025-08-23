@@ -2,25 +2,30 @@ CREATE OR REPLACE VIEW hubspot_datalake.deal_kpis_weekly_last3 AS
 WITH week_bounds AS (
   SELECT
     CASE
-      WHEN day_of_week(current_date) = 7 THEN current_date
-      ELSE date_add('day', -day_of_week(current_date), current_date)
+      WHEN day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)) = 7 
+      THEN CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)
+      ELSE date_add('day', -day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)), 
+                    CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date))
     END AS last_sunday
 ),
 last_3_weeks AS (
   SELECT
-    CAST(date_add('day', -6, last_sunday) AS date) AS week1_start,
-    CAST(last_sunday AS date) AS week1_end,
-    CAST(date_add('day', -13, last_sunday) AS date) AS week2_start,
-    CAST(date_add('day', -7, last_sunday) AS date) AS week2_end,
-    CAST(date_add('day', -20, last_sunday) AS date) AS week3_start,
-    CAST(date_add('day', -14, last_sunday) AS date) AS week3_end
+    -- Current week (most recent): ends on last_sunday, starts 6 days before
+    CAST(date_add('day', -6, last_sunday) AS date) AS current_week_start,
+    CAST(last_sunday AS date) AS current_week_end,
+    -- Previous week: ends 7 days before last_sunday, starts 13 days before
+    CAST(date_add('day', -13, last_sunday) AS date) AS prev_week_start,
+    CAST(date_add('day', -7, last_sunday) AS date) AS prev_week_end,
+    -- Week before that: ends 14 days before last_sunday, starts 20 days before
+    CAST(date_add('day', -20, last_sunday) AS date) AS prev2_week_start,
+    CAST(date_add('day', -14, last_sunday) AS date) AS prev2_week_end
   FROM week_bounds
 ),
 date_bounds AS (
-  SELECT week3_start AS first_week_start, week1_end AS last_week_end FROM last_3_weeks
+  SELECT prev2_week_start AS first_week_start, current_week_end AS last_week_end FROM last_3_weeks
 ),
 weeks AS (
-  SELECT CAST(date_trunc('week', d) AS date) AS week_start
+  SELECT DISTINCT CAST(d AS date) AS week_start
   FROM date_bounds db
   CROSS JOIN UNNEST(SEQUENCE(
     db.first_week_start,
@@ -34,7 +39,8 @@ opportunities AS (
     COUNT(1) AS opportunities_created
   FROM weeks w
   LEFT JOIN hubspot_datalake.deals_latest d
-    ON date_trunc('week', d.op_detected_at) = w.week_start
+    ON CAST(at_timezone(d.op_detected_at, 'America/Santiago') AS date) >= w.week_start
+    AND CAST(at_timezone(d.op_detected_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
   WHERE d.op_detected_at IS NOT NULL
   GROUP BY 1
 ),
@@ -44,7 +50,8 @@ proposals AS (
     COUNT(1) AS proposals_sent
   FROM weeks w
   LEFT JOIN hubspot_datalake.deals_latest d
-    ON date_trunc('week', d.proposal_sent_at) = w.week_start
+    ON CAST(at_timezone(d.proposal_sent_at, 'America/Santiago') AS date) >= w.week_start
+    AND CAST(at_timezone(d.proposal_sent_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
   WHERE d.proposal_sent_at IS NOT NULL
   GROUP BY 1
 ),
@@ -53,9 +60,11 @@ won AS (
     w.week_start,
     COUNT(1) AS closed_won
   FROM weeks w
-  LEFT JOIN hubspot_datalake.deals_latest d
-    ON date_trunc('week', d.closed_won_at) = w.week_start
-  WHERE d.closed_won_at IS NOT NULL
+  LEFT JOIN hubspot_datalake.deals_latest_clean d
+    ON CAST(at_timezone(d.closed_won_at, 'America/Santiago') AS date) >= w.week_start
+    AND CAST(at_timezone(d.closed_won_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
+  WHERE d.closed_won_at IS NOT NULL 
+    AND d.deal_status_quality = 'properly_closed_won'
   GROUP BY 1
 )
 SELECT

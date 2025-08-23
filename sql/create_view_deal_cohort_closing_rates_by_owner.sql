@@ -3,8 +3,8 @@ WITH cohorts AS (
   SELECT CAST(date_trunc('month', d) AS date) AS cohort_month
   FROM UNNEST(
     SEQUENCE(
-      DATE_TRUNC('month', DATE_ADD('month', -5, CURRENT_DATE)),
-      DATE_TRUNC('month', CURRENT_DATE),
+      DATE_TRUNC('month', DATE_ADD('month', -5, CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date))),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
@@ -18,7 +18,7 @@ months AS (
   CROSS JOIN UNNEST(
     SEQUENCE(
       b.first_cohort,
-      DATE_TRUNC('month', CURRENT_DATE),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
@@ -27,9 +27,10 @@ deal_base AS (
   SELECT
     d.deal_id,
     d.owner_id,
-    CAST(date_trunc('month', d.created_at) AS date) AS cohort_month,
-    CAST(date_trunc('month', d.closed_won_at) AS date) AS closed_month
-  FROM hubspot_datalake.deals_latest d
+    CAST(date_trunc('month', at_timezone(d.created_at, 'America/Santiago')) AS date) AS cohort_month,
+    CAST(date_trunc('month', at_timezone(d.closed_won_at, 'America/Santiago')) AS date) AS closed_month
+  FROM hubspot_datalake.deals_latest_clean d
+  WHERE d.deal_status_quality IN ('open', 'properly_closed_won', 'properly_closed_lost')
 ),
 owners_in_scope AS (
   SELECT DISTINCT owner_id FROM deal_base WHERE owner_id IS NOT NULL

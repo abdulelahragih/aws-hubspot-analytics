@@ -3,8 +3,8 @@ WITH cohorts AS (
   SELECT CAST(date_trunc('month', d) AS date) AS cohort_month
   FROM UNNEST(
     SEQUENCE(
-      DATE_TRUNC('month', DATE_ADD('month', -5, CURRENT_DATE)),
-      DATE_TRUNC('month', CURRENT_DATE),
+      DATE_TRUNC('month', DATE_ADD('month', -5, CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date))),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
@@ -18,17 +18,48 @@ months AS (
   CROSS JOIN UNNEST(
     SEQUENCE(
       b.first_cohort,
-      DATE_TRUNC('month', CURRENT_DATE),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
 ),
+month_bounds AS (
+  SELECT 
+    cohort_month,
+    -- Start of month: first day at 00:00:00 in Santiago, converted to UTC
+    from_iso8601_timestamp(
+      date_format(
+        CAST(cohort_month AS timestamp) AT TIME ZONE 'America/Santiago', 
+        '%Y-%m-%dT%H:%i:%sZ'
+      )
+    ) AS month_start_utc,
+    -- End of month: last day at 23:59:59 in Santiago, converted to UTC
+    from_iso8601_timestamp(
+      date_format(
+        (CAST(date_add('day', -1, date_add('month', 1, cohort_month)) AS timestamp) + INTERVAL '23' HOUR + INTERVAL '59' MINUTE + INTERVAL '59' SECOND) AT TIME ZONE 'America/Santiago', 
+        '%Y-%m-%dT%H:%i:%sZ'
+      )
+    ) AS month_end_utc
+  FROM cohorts
+),
 deals AS (
   SELECT
-    deal_id,
-    CAST(date_trunc('month', created_at) AS date) AS cohort_month,
-    CAST(date_trunc('month', closed_won_at) AS date) AS closed_month
-  FROM hubspot_datalake.deals_latest
+    d.deal_id,
+    mb.cohort_month,
+    -- Find which month this deal was closed (won OR lost)
+    COALESCE(
+      -- First try closed_won_at
+      (SELECT mb2.cohort_month 
+       FROM month_bounds mb2 
+       WHERE d.closed_won_at BETWEEN mb2.month_start_utc AND mb2.month_end_utc),
+      -- Then try closed_lost_at
+      (SELECT mb2.cohort_month 
+       FROM month_bounds mb2 
+       WHERE d.closed_lost_at BETWEEN mb2.month_start_utc AND mb2.month_end_utc)
+    ) AS closed_month
+  FROM hubspot_datalake.deals_latest d
+  CROSS JOIN month_bounds mb
+  WHERE d.created_at BETWEEN mb.month_start_utc AND mb.month_end_utc
 ),
 totals AS (
   SELECT cohort_month, COUNT(1) AS total_deals
@@ -61,8 +92,6 @@ joined AS (
 SELECT
   cohort_month,
   month_start,
-  date_format(cohort_month, '%M %Y') AS cohort_label_en,
-  date_format(month_start, '%M %Y') AS month_label_en,
   total_deals,
   closed_in_month,
   SUM(closed_in_month) OVER (PARTITION BY cohort_month ORDER BY month_start ROWS UNBOUNDED PRECEDING) AS cumulative_closed,

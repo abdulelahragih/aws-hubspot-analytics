@@ -16,9 +16,9 @@ SELECT
   TRY(date_diff('day', CAST(d.op_detected_at AS timestamp), CAST(d.proposal_prep_at AS timestamp))) AS op_to_prep_days,
   TRY(date_diff('day', CAST(d.proposal_prep_at AS timestamp), CAST(d.proposal_sent_at AS timestamp))) AS prep_to_sent_days,
   TRY(date_diff('day', CAST(d.proposal_sent_at AS timestamp), CAST(d.closed_won_at AS timestamp))) AS sent_to_won_days,
-  TRY(date_diff('day', CAST(d.created_at AS timestamp), COALESCE(CAST(d.closed_won_at AS timestamp), CAST(d.closed_lost_at AS timestamp), CAST(d.closed_at AS timestamp)))) AS sales_cycle_days,
-  (d.closed_won_at IS NOT NULL) AS is_won
-FROM hubspot_datalake.deals_latest d
+  TRY(date_diff('day', CAST(d.created_at AS timestamp), COALESCE(CAST(d.closed_won_at AS timestamp), CAST(d.closed_lost_at AS timestamp)))) AS sales_cycle_days,
+  (d.closed_won_at IS NOT NULL AND d.deal_status_quality = 'properly_closed_won') AS is_won
+FROM hubspot_datalake.deals_latest_clean d
 LEFT JOIN hubspot_datalake.owners o
   ON o.owner_id = d.owner_id;
 

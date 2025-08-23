@@ -64,3 +64,4 @@ if __name__ == "__main__":
     print(parse_iso_utc(utc_now_iso()).date())
     dt = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     print(dt)
+    print(_parse_hs_datetime("2025-03-10T13:47:37.635Z"))
