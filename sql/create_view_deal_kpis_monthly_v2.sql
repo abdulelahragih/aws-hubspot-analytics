@@ -30,7 +30,7 @@ closed_won AS (
     CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
     COUNT(1) AS closed_won
   FROM hubspot_datalake.deals_latest_clean
-  WHERE closed_won_at IS NOT NULL 
+  WHERE closed_won_at IS NOT NULL
     AND deal_status_quality = 'properly_closed_won'
   GROUP BY 1
 ),
@@ -38,9 +38,11 @@ avg_op_to_prep AS (
   SELECT
     CAST(date_trunc('month', at_timezone(proposal_prep_at, 'America/Santiago')) AS date) AS month_start,
     TRY(AVG(CASE
-      WHEN at_timezone(proposal_prep_at, 'America/Santiago') >= at_timezone(op_detected_at, 'America/Santiago')
-      THEN date_diff('day', 
-           CAST(at_timezone(op_detected_at, 'America/Santiago') AS date), 
+      WHEN date_diff('day',
+           CAST(at_timezone(op_detected_at, 'America/Santiago') AS date),
+           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date)) >= 0
+      THEN date_diff('day',
+           CAST(at_timezone(op_detected_at, 'America/Santiago') AS date),
            CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date))
       ELSE NULL
     END)) AS avg_op_to_prep_days,
@@ -53,9 +55,11 @@ avg_prep_to_sent AS (
   SELECT
     CAST(date_trunc('month', at_timezone(proposal_sent_at, 'America/Santiago')) AS date) AS month_start,
     TRY(AVG(CASE
-      WHEN at_timezone(proposal_sent_at, 'America/Santiago') >= at_timezone(proposal_prep_at, 'America/Santiago')
-      THEN date_diff('day', 
-           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date), 
+      WHEN date_diff('day',
+           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date),
+           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date)) >= 0
+      THEN date_diff('day',
+           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date),
            CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date))
       ELSE NULL
     END)) AS avg_prep_to_sent_days,
@@ -68,15 +72,17 @@ avg_sent_to_won AS (
   SELECT
     CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
     TRY(AVG(CASE
-      WHEN at_timezone(closed_won_at, 'America/Santiago') >= at_timezone(proposal_sent_at, 'America/Santiago')
-      THEN date_diff('day', 
-           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date), 
+      WHEN date_diff('day',
+           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date)) >= 0
+      THEN date_diff('day',
+           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date),
            CAST(at_timezone(closed_won_at, 'America/Santiago') AS date))
       ELSE NULL
     END)) AS avg_sent_to_won_days,
     COUNT_IF(proposal_sent_at IS NOT NULL AND closed_won_at IS NOT NULL) AS num_deals
   FROM hubspot_datalake.deals_latest_clean
-  WHERE proposal_sent_at IS NOT NULL AND closed_won_at IS NOT NULL 
+  WHERE proposal_sent_at IS NOT NULL AND closed_won_at IS NOT NULL
     AND deal_status_quality = 'properly_closed_won'
   GROUP BY 1
 ),
@@ -84,15 +90,17 @@ avg_sales_cycle AS (
   SELECT
     CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
     TRY(AVG(CASE
-      WHEN at_timezone(closed_won_at, 'America/Santiago') >= at_timezone(created_at, 'America/Santiago')
-      THEN date_diff('day', 
-           CAST(at_timezone(created_at, 'America/Santiago') AS date), 
+      WHEN date_diff('day',
+           CAST(at_timezone(created_at, 'America/Santiago') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date)) >= 0
+      THEN date_diff('day',
+           CAST(at_timezone(created_at, 'America/Santiago') AS date),
            CAST(at_timezone(closed_won_at, 'America/Santiago') AS date))
       ELSE NULL
     END)) AS avg_sales_cycle_days,
     COUNT_IF(created_at IS NOT NULL AND closed_won_at IS NOT NULL) AS num_deals
   FROM hubspot_datalake.deals_latest_clean
-  WHERE created_at IS NOT NULL AND closed_won_at IS NOT NULL 
+  WHERE created_at IS NOT NULL AND closed_won_at IS NOT NULL
     AND deal_status_quality = 'properly_closed_won'
   GROUP BY 1
 )

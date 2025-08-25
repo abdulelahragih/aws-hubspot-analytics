@@ -23,27 +23,58 @@ months AS (
     )
   ) AS t(d)
 ),
-deal_base AS (
+month_bounds AS (
+  SELECT 
+    cohort_month,
+    -- Start of month: first day at 00:00:00 in Santiago, converted to UTC
+    from_iso8601_timestamp(
+      date_format(
+        CAST(cohort_month AS timestamp) AT TIME ZONE 'America/Santiago', 
+        '%Y-%m-%dT%H:%i:%sZ'
+      )
+    ) AS month_start_utc,
+    -- End of month: last day at 23:59:59 in Santiago, converted to UTC
+    from_iso8601_timestamp(
+      date_format(
+        (CAST(date_add('day', -1, date_add('month', 1, cohort_month)) AS timestamp) + INTERVAL '23' HOUR + INTERVAL '59' MINUTE + INTERVAL '59' SECOND) AT TIME ZONE 'America/Santiago', 
+        '%Y-%m-%dT%H:%i:%sZ'
+      )
+    ) AS month_end_utc
+  FROM cohorts
+),
+deals AS (
   SELECT
     d.deal_id,
     d.owner_id,
-    CAST(date_trunc('month', at_timezone(d.created_at, 'America/Santiago')) AS date) AS cohort_month,
-    CAST(date_trunc('month', at_timezone(d.closed_won_at, 'America/Santiago')) AS date) AS closed_month
-  FROM hubspot_datalake.deals_latest_clean d
-  WHERE d.deal_status_quality IN ('open', 'properly_closed_won', 'properly_closed_lost')
+    mb.cohort_month,
+    -- Find which month this deal was closed (won OR lost) - consistent with general cohort analysis
+    COALESCE(
+      -- First try closed_won_at
+      (SELECT mb2.cohort_month 
+       FROM month_bounds mb2 
+       WHERE d.closed_won_at BETWEEN mb2.month_start_utc AND mb2.month_end_utc),
+      -- Then try closed_lost_at
+      (SELECT mb2.cohort_month 
+       FROM month_bounds mb2 
+       WHERE d.closed_lost_at BETWEEN mb2.month_start_utc AND mb2.month_end_utc)
+    ) AS closed_month
+  FROM hubspot_datalake.deals_latest d  -- Use deals_latest for consistency with general cohort analysis
+  CROSS JOIN month_bounds mb
+  WHERE d.created_at BETWEEN mb.month_start_utc AND mb.month_end_utc
+    AND d.owner_id IS NOT NULL  -- Only include deals with owners
 ),
 owners_in_scope AS (
-  SELECT DISTINCT owner_id FROM deal_base WHERE owner_id IS NOT NULL
+  SELECT DISTINCT owner_id FROM deals WHERE owner_id IS NOT NULL
 ),
 totals AS (
   SELECT cohort_month, owner_id, COUNT(1) AS total_deals
-  FROM deal_base
+  FROM deals
   WHERE cohort_month IS NOT NULL
   GROUP BY 1, 2
 ),
 closed AS (
   SELECT cohort_month, owner_id, closed_month, COUNT(1) AS closed_in_month
-  FROM deal_base
+  FROM deals
   WHERE cohort_month IS NOT NULL AND closed_month IS NOT NULL
   GROUP BY 1, 2, 3
 ),
@@ -81,6 +112,3 @@ SELECT
 FROM joined j
 LEFT JOIN hubspot_datalake.owners o ON o.owner_id = j.owner_id
 ORDER BY owner_name, cohort_month, month_start;
-
-
-
