@@ -133,7 +133,7 @@ def contacts_handler(_event, _context):
     return {"written": int(len(out_df))}
 
 
-def contacts_handler(_event, _context):
+def contacts_dim_handler(_event, _context):
     """Ingest contacts as a dimension table with basic attributes.
 
     Output: s3://{bucket}/dim/contacts/ as a single, non-partitioned snapshot (overwrite each run)

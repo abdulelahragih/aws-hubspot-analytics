@@ -5,9 +5,8 @@ from functions.activities import activities_handler
 from functions.deals import deals_handler
 from functions.owners import owners_handler
 from functions.companies import companies_handler
-from functions.contacts import contacts_handler
 from functions.pipelines_dim import pipelines_dim_handler
-from functions.contacts import contacts_dim_handler
+from functions.contacts import contacts_handler
 
 LOG = logging.getLogger()
 LOG.setLevel(logging.INFO)

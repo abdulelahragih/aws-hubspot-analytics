@@ -6,7 +6,7 @@ import pandas as pd
 from hubspot_client import get_client
 from helpers.normalization import map_specific_type, extract_metadata
 from helpers.storage import ensure_bucket_env
-from helpers.utils import utc_now_iso
+from helpers.utils import utc_now_iso, _parse_hs_datetime
 import awswrangler as wr
 
 LOG = logging.getLogger(__name__)
