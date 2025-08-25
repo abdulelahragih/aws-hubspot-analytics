@@ -85,17 +85,61 @@ def deals_handler(_event, _context):
     LOG.info("Running raw deals ingest")
     ensure_bucket_env()
 
-    client = get_client()
+    from helpers.sync_state import get_sync_manager
 
-    result: List[Dict[str, Any]] = client.paginated_request(
-        method="GET",
-        endpoint="/crm/v3/objects/deals",
-        params={
-            "properties": ",".join(ALL_PROPS),
-            "limit": 100,
-            "associations": "company,contact",
-        },
-    )
+    client = get_client()
+    sync_manager = get_sync_manager()
+
+    # Determine sync strategy and date range
+    from_date, to_date = sync_manager.get_sync_dates("deals")
+
+    if from_date:
+        # Incremental sync using dual-fetch strategy
+        LOG.info(f"Performing incremental sync from {from_date} to {to_date}")
+
+        # Fetch newly created deals
+        created_deals: List[Dict[str, Any]] = client.search_between_chunked(
+            object_type="deals",
+            properties=ALL_PROPS + ["hs_lastmodifieddate", "createdate"],
+            from_iso=from_date,
+            to_iso=to_date,
+            search_prop="createdate",
+            sort_direction="ASCENDING",
+        )
+
+        # Fetch modified deals
+        modified_deals: List[Dict[str, Any]] = client.search_between_chunked(
+            object_type="deals",
+            properties=ALL_PROPS + ["hs_lastmodifieddate", "createdate"],
+            from_iso=from_date,
+            to_iso=to_date,
+            search_prop="hs_lastmodifieddate",
+            sort_direction="ASCENDING",
+        )
+
+        # Merge and deduplicate by deal ID (keep the most recent version)
+        deals_by_id: Dict[str, Dict[str, Any]] = {}
+        for deal in created_deals + modified_deals:
+            deal_id = deal.get("id")
+            if deal_id:
+                deals_by_id[deal_id] = deal
+
+        result = list(deals_by_id.values())
+        LOG.info(
+            f"Fetched {len(created_deals)} created and {len(modified_deals)} modified deals, deduplicated to {len(result)} unique deals"
+        )
+    else:
+        # Full sync using paginated request
+        LOG.info("Performing full sync")
+        result: List[Dict[str, Any]] = client.paginated_request(
+            method="GET",
+            endpoint="/crm/v3/objects/deals",
+            params={
+                "properties": ",".join(ALL_PROPS + ["hs_lastmodifieddate"]),
+                "limit": 100,
+                "associations": "company,contact",
+            },
+        )
 
     if not result:
         LOG.info("No deals to write")
@@ -138,20 +182,38 @@ def deals_handler(_event, _context):
     df = pd.DataFrame.from_records(deals)
     if df.empty:
         LOG.info("No deals to write after normalization")
+        # Update sync state even if no data to track that sync ran
+        try:
+            sync_manager.update_sync_state("deals", records_processed=0)
+        except Exception as e:
+            LOG.warning(f"Failed to update sync state: {e}")
         return {"written": 0}
 
     df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
     out_df = df.drop_duplicates(
         keep="last"
     )
+
+    # Extract date bounds for sync state tracking
+    max_created, max_modified = sync_manager.extract_date_bounds_from_data(out_df)
+
     path = f"s3://{S3_BUCKET}/curated/deals/"
-    wr.s3.to_parquet(
-        df=out_df,
-        path=path,
-        dataset=True,
-        compression="snappy",
-        partition_cols=["dt"],
-        mode="overwrite_partitions",
+
+    # Use the reusable merge strategy from sync_state manager
+    sync_manager.write_with_merge_strategy(
+        df=out_df, s3_path=path, partition_cols=["dt"], primary_key_col="deal_id"
     )
-    LOG.info("Wrote %s raw deal rows to %s", len(df), path)
-    return {"written": int(len(df))}
+
+    # Update sync state with the latest dates from the processed data
+    try:
+        sync_manager.update_sync_state(
+            "deals",
+            last_created_at=max_created,
+            last_modified_at=max_modified,
+            records_processed=len(out_df),
+        )
+    except Exception as e:
+        LOG.warning(f"Failed to update sync state: {e}")
+
+    LOG.info("Wrote %s raw deal rows to %s", len(out_df), path)
+    return {"written": int(len(out_df))}

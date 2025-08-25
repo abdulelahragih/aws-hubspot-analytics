@@ -7,7 +7,6 @@ import pandas as pd
 
 from helpers.utils import _parse_hs_datetime
 from hubspot_client import get_client
-from helpers.utils import utc_now_iso
 from helpers.storage import ensure_bucket_env
 
 
@@ -40,8 +39,16 @@ def contacts_handler(_event, _context):
     LOG.info("Running contacts ingest")
     ensure_bucket_env()
 
-    from_iso = os.environ.get("CONTACTS_FROM", START_DATE)
-    to_iso = utc_now_iso()
+    from helpers.sync_state import get_sync_manager
+
+    sync_manager = get_sync_manager()
+
+    # Determine sync strategy and date range
+    from_date, to_date = sync_manager.get_sync_dates("contacts")
+
+    # Use determined dates or fall back to environment/defaults
+    from_iso = from_date if from_date else os.environ.get("CONTACTS_FROM", START_DATE)
+    to_iso = to_date
 
     client = get_client()
     props = [
@@ -122,12 +129,10 @@ def contacts_handler(_event, _context):
     out_df = df[out_cols].copy()
 
     path = f"s3://{S3_BUCKET}/curated/contacts/"
-    wr.s3.to_parquet(
-        df=out_df,
-        path=path,
-        dataset=True,
-        compression="snappy",
-        partition_cols=["dt"],
+
+    # Use the reusable merge strategy from sync_state manager
+    sync_manager.write_with_merge_strategy(
+        df=out_df, s3_path=path, partition_cols=["dt"], primary_key_col="contact_id"
     )
     LOG.info("Wrote %s contact rows to %s", len(out_df), path)
     return {"written": int(len(out_df))}
@@ -142,7 +147,13 @@ def contacts_dim_handler(_event, _context):
     LOG.info("Running contacts dim ingest")
     ensure_bucket_env()
 
+    from helpers.sync_state import get_sync_manager
+
     client = get_client()
+    sync_manager = get_sync_manager()
+
+    # Determine sync strategy and date range
+    from_date, to_date = sync_manager.get_sync_dates("contacts_dim")
     props = [
         "hubspot_owner_id",
         "createdate",
@@ -153,20 +164,60 @@ def contacts_dim_handler(_event, _context):
         "email",
     ]
 
-    # Full scan via GET /crm/v3/objects/contacts with pagination
-    contacts: List[Dict[str, Any]] = client.paginated_request(
-        method="GET",
-        endpoint="/crm/v3/objects/contacts",
-        params={
-            "properties": ",".join(props),
-            "limit": 100,
-            "archived": "false",
-        },
-        result_key="results",
-    )
+    if from_date:
+        # Incremental sync using search API
+        LOG.info(f"Performing incremental sync from {from_date} to {to_date}")
+        # Dual-fetch strategy: get both created and modified contacts
+        created_contacts: List[Dict[str, Any]] = client.search_between_chunked(
+            object_type="contacts",
+            properties=props,
+            from_iso=from_date,
+            to_iso=to_date,
+            search_prop="createdate",
+            sort_direction="ASCENDING",
+        )
+
+        modified_contacts: List[Dict[str, Any]] = client.search_between_chunked(
+            object_type="contacts",
+            properties=props,
+            from_iso=from_date,
+            to_iso=to_date,
+            search_prop="lastmodifieddate",
+            sort_direction="ASCENDING",
+        )
+
+        # Merge and deduplicate by contact ID (keep the most recent version)
+        contacts_by_id: Dict[str, Dict[str, Any]] = {}
+        for contact in created_contacts + modified_contacts:
+            contact_id = contact.get("id")
+            if contact_id:
+                contacts_by_id[contact_id] = contact
+
+        contacts = list(contacts_by_id.values())
+        LOG.info(
+            f"Fetched {len(created_contacts)} created and {len(modified_contacts)} modified contacts, deduplicated to {len(contacts)} unique contacts"
+        )
+    else:
+        # Full scan via GET /crm/v3/objects/contacts with pagination
+        LOG.info("Performing full sync")
+        contacts: List[Dict[str, Any]] = client.paginated_request(
+            method="GET",
+            endpoint="/crm/v3/objects/contacts",
+            params={
+                "properties": ",".join(props),
+                "limit": 100,
+                "archived": "false",
+            },
+            result_key="results",
+        )
 
     if not contacts:
         LOG.info("No contacts to write for dim")
+        # Update sync state even if no data to track that sync ran
+        try:
+            sync_manager.update_sync_state("contacts_dim", records_processed=0)
+        except Exception as e:
+            LOG.warning(f"Failed to update sync state: {e}")
         return {"written": 0}
 
     recs: List[Dict[str, Any]] = []
@@ -187,17 +238,34 @@ def contacts_dim_handler(_event, _context):
     df = pd.DataFrame.from_records(recs)
     if df.empty:
         LOG.info("No contacts to write after normalization for dim")
+        # Update sync state even if no data to track that sync ran
+        try:
+            sync_manager.update_sync_state("contacts_dim", records_processed=0)
+        except Exception as e:
+            LOG.warning(f"Failed to update sync state: {e}")
         return {"written": 0}
+
+    # Extract date bounds for sync state tracking
+    max_created, max_modified = sync_manager.extract_date_bounds_from_data(df)
 
     df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
     path = f"s3://{S3_BUCKET}/dim/contacts/"
-    wr.s3.to_parquet(
-        df=df,
-        path=path,
-        dataset=True,
-        compression="snappy",
-        partition_cols=["dt"],
-        mode="overwrite_partitions",
+
+    # Use the reusable merge strategy from sync_state manager
+    sync_manager.write_with_merge_strategy(
+        df=df, s3_path=path, partition_cols=["dt"], primary_key_col="contact_id"
     )
+
+    # Update sync state with the latest dates from the processed data
+    try:
+        sync_manager.update_sync_state(
+            "contacts_dim",
+            last_created_at=max_created,
+            last_modified_at=max_modified,
+            records_processed=len(df),
+        )
+    except Exception as e:
+        LOG.warning(f"Failed to update sync state: {e}")
+
     LOG.info("Wrote %s contacts to %s", len(df), path)
     return {"written": int(len(df))}
