@@ -14,7 +14,7 @@ LOG.setLevel(logging.INFO)
 S3_BUCKET = os.environ.get("S3_BUCKET")
 
 
-def pipelines_dim_handler(_event, _context):
+def pipelines_handler(_event, _context):
     """Ingest deal pipelines and stages into a dim table: dim_stage."""
     ensure_bucket_env()
     client = get_client()
