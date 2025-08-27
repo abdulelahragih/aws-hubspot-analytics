@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# CDK build output
+cdk.out/
+
+# Compiled JavaScript files
+*.js
+!jest.config.js
+
+# Package lock files
+package-lock.json
+
+# Build outputs
+lib/*.js
+bin/*.js
+test/*.js
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db

@@ -18,7 +18,8 @@ def handler(event, context):
     This allows multiple Lambda functions to reuse the same image
     and choose behavior via environment variable.
     """
-    task = os.environ.get("TASK", "deals").lower()
+    task = os.environ.get("TASK", None)
+    task = task.strip().lower() if task else None
     if task == "activities":
         return activities_handler(event, context)
     if task == "deals":
@@ -31,7 +32,4 @@ def handler(event, context):
         return contacts_handler(event, context)
     if task == "pipelines_dim":
         return pipelines_dim_handler(event, context)
-    if task == "contacts_dim":
-        return contacts_dim_handler(event, context)
-    LOG.warning("Unknown TASK '%s' — defaulting to deals", task)
-    return deals_handler(event, context)
+    raise RuntimeError("Unknown TASK '%s'" % task)

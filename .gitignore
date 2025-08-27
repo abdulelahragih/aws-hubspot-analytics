@@ -10,3 +10,4 @@ google-scripts/
 .venv/
 .idea/
 __pycache__/
+.cursor/mcp.json
