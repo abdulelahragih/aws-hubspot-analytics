@@ -2,10 +2,10 @@ CREATE OR REPLACE VIEW hubspot_datalake.deal_kpis_weekly_last3_by_owner AS
 WITH week_bounds AS (
   SELECT
     CASE
-      WHEN day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)) = 7 
-      THEN CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)
-      ELSE date_add('day', -day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)), 
-                    CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date))
+      WHEN day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)) = 7
+      THEN CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)
+      ELSE date_add('day', -day_of_week(CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)),
+                    CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date))
     END AS last_sunday
 ),
 last_3_weeks AS (
@@ -39,8 +39,8 @@ opportunities AS (
     COUNT(1) AS opportunities_created
   FROM weeks w
   LEFT JOIN hubspot_datalake.deals_latest d
-    ON CAST(at_timezone(d.op_detected_at, 'America/Santiago') AS date) >= w.week_start
-    AND CAST(at_timezone(d.op_detected_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
+    ON CAST(at_timezone(d.op_detected_at, 'America/Montevideo') AS date) >= w.week_start
+    AND CAST(at_timezone(d.op_detected_at, 'America/Montevideo') AS date) <= date_add('day', 6, w.week_start)
   WHERE d.op_detected_at IS NOT NULL
   GROUP BY 1, 2
 ),
@@ -51,8 +51,8 @@ proposals AS (
     COUNT(1) AS proposals_sent
   FROM weeks w
   LEFT JOIN hubspot_datalake.deals_latest d
-    ON CAST(at_timezone(d.proposal_sent_at, 'America/Santiago') AS date) >= w.week_start
-    AND CAST(at_timezone(d.proposal_sent_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
+    ON CAST(at_timezone(d.proposal_sent_at, 'America/Montevideo') AS date) >= w.week_start
+    AND CAST(at_timezone(d.proposal_sent_at, 'America/Montevideo') AS date) <= date_add('day', 6, w.week_start)
   WHERE d.proposal_sent_at IS NOT NULL
   GROUP BY 1, 2
 ),
@@ -63,8 +63,8 @@ won AS (
     COUNT(1) AS closed_won
   FROM weeks w
   LEFT JOIN hubspot_datalake.deals_latest_clean d
-    ON CAST(at_timezone(d.closed_won_at, 'America/Santiago') AS date) >= w.week_start
-    AND CAST(at_timezone(d.closed_won_at, 'America/Santiago') AS date) <= date_add('day', 6, w.week_start)
+    ON CAST(at_timezone(d.closed_won_at, 'America/Montevideo') AS date) >= w.week_start
+    AND CAST(at_timezone(d.closed_won_at, 'America/Montevideo') AS date) <= date_add('day', 6, w.week_start)
   WHERE d.closed_won_at IS NOT NULL 
     AND d.deal_status_quality = 'properly_closed_won'
   GROUP BY 1, 2

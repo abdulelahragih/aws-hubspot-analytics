@@ -4,19 +4,19 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CASE
 					WHEN day_of_week(
 						CAST(
-							current_timestamp AT TIME ZONE 'America/Santiago' AS date
+							current_timestamp AT TIME ZONE 'America/Montevideo' AS date
 						)
 					) = 7 THEN CAST(
-						current_timestamp AT TIME ZONE 'America/Santiago' AS date
+						current_timestamp AT TIME ZONE 'America/Montevideo' AS date
 					) ELSE date_add(
 						'day',
 						- day_of_week(
 							CAST(
-								current_timestamp AT TIME ZONE 'America/Santiago' AS date
+								current_timestamp AT TIME ZONE 'America/Montevideo' AS date
 							)
 						),
 						CAST(
-							current_timestamp AT TIME ZONE 'America/Santiago' AS date
+							current_timestamp AT TIME ZONE 'America/Montevideo' AS date
 						)
 					)
 				END
@@ -54,7 +54,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			CAST(
 				date_trunc(
 					'week',
-					at_timezone(a.created_at, 'America/Santiago')
+					at_timezone(a.created_at, 'America/Montevideo')
 				) AS date
 			) week_start,
 			(
@@ -117,7 +117,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CAST(
 					date_trunc(
 						'week',
-						at_timezone(a.created_at, 'America/Santiago')
+						at_timezone(a.created_at, 'America/Montevideo')
 					) AS date
 				) BETWEEN db.first_week_start AND db.last_week_end
 				AND (
@@ -133,7 +133,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			CAST(
 				date_trunc(
 					'week',
-					at_timezone(c.created_at, 'America/Santiago')
+					at_timezone(c.created_at, 'America/Montevideo')
 				) AS date
 			) week_start,
 			'Contact created' activity_category
@@ -148,7 +148,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CAST(
 					date_trunc(
 						'week',
-						at_timezone(c.created_at, 'America/Santiago')
+						at_timezone(c.created_at, 'America/Montevideo')
 					) AS date
 				) BETWEEN db.first_week_start AND db.last_week_end
 			)
@@ -158,7 +158,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			CAST(
 				date_trunc(
 					'week',
-					at_timezone(c.last_modified_at, 'America/Santiago')
+					at_timezone(c.last_modified_at, 'America/Montevideo')
 				) AS date
 			) week_start,
 			'Contact worked' activity_category
@@ -173,7 +173,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CAST(
 					date_trunc(
 						'week',
-						at_timezone(c.last_modified_at, 'America/Santiago')
+						at_timezone(c.last_modified_at, 'America/Montevideo')
 					) AS date
 				) BETWEEN db.first_week_start AND db.last_week_end
 			)
@@ -183,7 +183,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 			CAST(
 				date_trunc(
 					'week',
-					at_timezone(d.created_at, 'America/Santiago')
+					at_timezone(d.created_at, 'America/Montevideo')
 				) AS date
 			) week_start,
 			'Deal created' activity_category
@@ -198,7 +198,7 @@ OR REPLACE VIEW "activity_volume_by_owner_type_last3weeks_v3" AS WITH week_bound
 				CAST(
 					date_trunc(
 						'week',
-						at_timezone(d.created_at, 'America/Santiago')
+						at_timezone(d.created_at, 'America/Montevideo')
 					) AS date
 				) BETWEEN db.first_week_start AND db.last_week_end
 				AND (

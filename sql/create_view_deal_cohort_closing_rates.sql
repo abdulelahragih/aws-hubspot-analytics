@@ -3,8 +3,8 @@ WITH cohorts AS (
   SELECT CAST(date_trunc('month', d) AS date) AS cohort_month
   FROM UNNEST(
     SEQUENCE(
-      DATE_TRUNC('month', DATE_ADD('month', -5, CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date))),
-      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
+      DATE_TRUNC('month', DATE_ADD('month', -5, CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date))),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
@@ -18,7 +18,7 @@ months AS (
   CROSS JOIN UNNEST(
     SEQUENCE(
       b.first_cohort,
-      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
@@ -29,14 +29,14 @@ month_bounds AS (
     -- Start of month: first day at 00:00:00 in Santiago, converted to UTC
     from_iso8601_timestamp(
       date_format(
-        CAST(cohort_month AS timestamp) AT TIME ZONE 'America/Santiago', 
+        CAST(cohort_month AS timestamp) AT TIME ZONE 'America/Montevideo',
         '%Y-%m-%dT%H:%i:%sZ'
       )
     ) AS month_start_utc,
     -- End of month: last day at 23:59:59 in Santiago, converted to UTC
     from_iso8601_timestamp(
       date_format(
-        (CAST(date_add('day', -1, date_add('month', 1, cohort_month)) AS timestamp) + INTERVAL '23' HOUR + INTERVAL '59' MINUTE + INTERVAL '59' SECOND) AT TIME ZONE 'America/Santiago', 
+        (CAST(date_add('day', -1, date_add('month', 1, cohort_month)) AS timestamp) + INTERVAL '23' HOUR + INTERVAL '59' MINUTE + INTERVAL '59' SECOND) AT TIME ZONE 'America/Montevideo',
         '%Y-%m-%dT%H:%i:%sZ'
       )
     ) AS month_end_utc

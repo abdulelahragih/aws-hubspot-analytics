@@ -4,14 +4,14 @@ WITH months AS (
   FROM UNNEST(
     SEQUENCE(
       DATE '2025-03-01',
-      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Santiago' AS date)),
+      DATE_TRUNC('month', CAST(current_timestamp AT TIME ZONE 'America/Montevideo' AS date)),
       INTERVAL '1' MONTH
     )
   ) AS t(d)
 ),
 opportunities AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(op_detected_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(op_detected_at, 'America/Montevideo')) AS date) AS month_start,
     COUNT(1) AS opportunities_created
   FROM hubspot_datalake.deals_latest
   WHERE op_detected_at IS NOT NULL
@@ -19,7 +19,7 @@ opportunities AS (
 ),
 proposals AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(proposal_sent_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(proposal_sent_at, 'America/Montevideo')) AS date) AS month_start,
     COUNT(1) AS proposals_sent
   FROM hubspot_datalake.deals_latest
   WHERE proposal_sent_at IS NOT NULL
@@ -27,7 +27,7 @@ proposals AS (
 ),
 closed_won AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Montevideo')) AS date) AS month_start,
     COUNT(1) AS closed_won
   FROM hubspot_datalake.deals_latest_clean
   WHERE closed_won_at IS NOT NULL
@@ -36,14 +36,14 @@ closed_won AS (
 ),
 avg_op_to_prep AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(proposal_prep_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(proposal_prep_at, 'America/Montevideo')) AS date) AS month_start,
     TRY(AVG(CASE
       WHEN date_diff('day',
-           CAST(at_timezone(op_detected_at, 'America/Santiago') AS date),
-           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date)) >= 0
+           CAST(at_timezone(op_detected_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(proposal_prep_at, 'America/Montevideo') AS date)) >= 0
       THEN date_diff('day',
-           CAST(at_timezone(op_detected_at, 'America/Santiago') AS date),
-           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date))
+           CAST(at_timezone(op_detected_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(proposal_prep_at, 'America/Montevideo') AS date))
       ELSE NULL
     END)) AS avg_op_to_prep_days,
     COUNT_IF(op_detected_at IS NOT NULL AND proposal_prep_at IS NOT NULL) AS num_deals
@@ -53,14 +53,14 @@ avg_op_to_prep AS (
 ),
 avg_prep_to_sent AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(proposal_sent_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(proposal_sent_at, 'America/Montevideo')) AS date) AS month_start,
     TRY(AVG(CASE
       WHEN date_diff('day',
-           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date),
-           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date)) >= 0
+           CAST(at_timezone(proposal_prep_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(proposal_sent_at, 'America/Montevideo') AS date)) >= 0
       THEN date_diff('day',
-           CAST(at_timezone(proposal_prep_at, 'America/Santiago') AS date),
-           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date))
+           CAST(at_timezone(proposal_prep_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(proposal_sent_at, 'America/Montevideo') AS date))
       ELSE NULL
     END)) AS avg_prep_to_sent_days,
     COUNT_IF(proposal_prep_at IS NOT NULL AND proposal_sent_at IS NOT NULL) AS num_deals
@@ -70,14 +70,14 @@ avg_prep_to_sent AS (
 ),
 avg_sent_to_won AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Montevideo')) AS date) AS month_start,
     TRY(AVG(CASE
       WHEN date_diff('day',
-           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date),
-           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date)) >= 0
+           CAST(at_timezone(proposal_sent_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Montevideo') AS date)) >= 0
       THEN date_diff('day',
-           CAST(at_timezone(proposal_sent_at, 'America/Santiago') AS date),
-           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date))
+           CAST(at_timezone(proposal_sent_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Montevideo') AS date))
       ELSE NULL
     END)) AS avg_sent_to_won_days,
     COUNT_IF(proposal_sent_at IS NOT NULL AND closed_won_at IS NOT NULL) AS num_deals
@@ -88,14 +88,14 @@ avg_sent_to_won AS (
 ),
 avg_sales_cycle AS (
   SELECT
-    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Santiago')) AS date) AS month_start,
+    CAST(date_trunc('month', at_timezone(closed_won_at, 'America/Montevideo')) AS date) AS month_start,
     TRY(AVG(CASE
       WHEN date_diff('day',
-           CAST(at_timezone(created_at, 'America/Santiago') AS date),
-           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date)) >= 0
+           CAST(at_timezone(created_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Montevideo') AS date)) >= 0
       THEN date_diff('day',
-           CAST(at_timezone(created_at, 'America/Santiago') AS date),
-           CAST(at_timezone(closed_won_at, 'America/Santiago') AS date))
+           CAST(at_timezone(created_at, 'America/Montevideo') AS date),
+           CAST(at_timezone(closed_won_at, 'America/Montevideo') AS date))
       ELSE NULL
     END)) AS avg_sales_cycle_days,
     COUNT_IF(created_at IS NOT NULL AND closed_won_at IS NOT NULL) AS num_deals
