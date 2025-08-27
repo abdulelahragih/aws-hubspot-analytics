@@ -6,31 +6,25 @@ import pandas as pd
 from hubspot_client import get_client
 from helpers.normalization import map_specific_type, extract_metadata
 from helpers.storage import ensure_bucket_env
-from helpers.utils import _parse_hs_datetime
-import awswrangler as wr
+from helpers.utils import parse_hs_datetime, pick_date, utc_now_iso
+from helpers.sync_state import get_sync_manager
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 
-START_DATE = os.environ.get("START_DATE", "2025-01-01")
 S3_BUCKET = os.environ.get("S3_BUCKET")
-
 
 def activities_handler(_event, _context):
     LOG.info("Running activities ingest")
     ensure_bucket_env()
 
-    from helpers.sync_state import get_sync_manager
-
     sync_manager = get_sync_manager()
+    sync_state = sync_manager.get_sync_dates("activities")
 
-    # Determine sync strategy and date range
-    from_date, to_date = sync_manager.get_sync_dates("activities")
+    created_from_date = pick_date(candidate=sync_state.new_records_checkpoint, env_var="START_DATE", fallback_months=12)
+    modified_from_date = pick_date(candidate=sync_state.modified_records_check_point, env_var="START_DATE", fallback_months=12)
 
-    # Use determined dates or fall back to environment/defaults
-    from_iso = from_date if from_date else os.environ.get("ACTIVITIES_FROM", START_DATE)
-    to_iso = to_date
-
+    to_date = utc_now_iso()
     # Per-object properties mirroring Apps Script
     common_props = ["hs_createdate", "hs_lastmodifieddate", "hubspot_owner_id"]
     activity_props = {
@@ -71,30 +65,38 @@ def activities_handler(_event, _context):
     client = get_client()
     for obj in ["emails", "calls", "meetings", "tasks", "notes", "communications"]:
         try:
-            LOG.info(f"Fetching {obj} from {from_iso} to {to_iso}")
+            LOG.info(f"Fetching {obj} from {created_from_date} to {to_date}")
 
-            # Dual-fetch strategy: get both created and modified activities
+            LOG.info(
+                "Fetching new activities..."
+            )
             created_activities = client.search_between_chunked(
                 object_type=obj,
                 properties=common_props + activity_props.get(obj, []),
-                from_iso=from_iso,
-                to_iso=to_iso,
+                from_iso=created_from_date,
+                to_iso=to_date,
                 search_prop="hs_createdate",
                 sort_direction="DESCENDING",
             )
-
-            modified_activities = client.search_between_chunked(
-                object_type=obj,
-                properties=common_props + activity_props.get(obj, []),
-                from_iso=from_iso,
-                to_iso=to_iso,
-                search_prop="hs_lastmodifieddate",
-                sort_direction="DESCENDING",
-            )
+            if sync_state.is_incremental_sync_enabled:
+                LOG.info(
+                    "Fetching modified activities..."
+                )
+                modified_activities = client.search_between_chunked(
+                    object_type=obj,
+                    properties=common_props + activity_props.get(obj, []),
+                    from_iso=modified_from_date,
+                    to_iso=to_date,
+                    search_prop="hs_lastmodifieddate",
+                    sort_direction="DESCENDING",
+                )
+            else:
+                modified_activities = []
 
             # Merge and deduplicate by activity ID (keep the most recent version)
             activities_by_id: Dict[str, Dict[str, Any]] = {}
-            for activity in created_activities + modified_activities:
+            combined_activities = created_activities + modified_activities
+            for activity in combined_activities:
                 activity_id = activity.get("id")
                 if activity_id:
                     activities_by_id[activity_id] = activity
@@ -131,8 +133,8 @@ def activities_handler(_event, _context):
                         "activity_id": obj_row.get("id"),
                         "activity_type": activity_type,
                         "owner_id": props.get("hubspot_owner_id") or None,
-                        "created_at": _parse_hs_datetime(props.get("hs_createdate")),
-                        "last_modified_at": _parse_hs_datetime(
+                        "created_at": parse_hs_datetime(props.get("hs_createdate")),
+                        "last_modified_at": parse_hs_datetime(
                             props.get("hs_lastmodifieddate") or props.get("hs_createdate")),
                         **extract_metadata(props, obj),
                     }
@@ -147,30 +149,10 @@ def activities_handler(_event, _context):
     if not activities:
         LOG.info("No activities to write")
         # Update sync state even if no data to track that sync ran
-        try:
-            sync_manager.update_sync_state("activities", records_processed=0)
-        except Exception as e:
-            LOG.warning(f"Failed to update sync state: {e}")
+        sync_manager.update_sync_state("activities", records_processed=0)
         return {"written": 0}
 
     df = pd.DataFrame.from_records(activities)
-    if df.empty:
-        LOG.info("No activities to write after normalization")
-        # Update sync state even if no data to track that sync ran
-        try:
-            sync_manager.update_sync_state("activities", records_processed=0)
-        except Exception as e:
-            LOG.warning(f"Failed to update sync state: {e}")
-        return {"written": 0}
-
-    # Extract core fields from nested 'engagement'
-    def _get_nested(dct, key):
-        return dct.get(key) if isinstance(dct, dict) else None
-
-    def _get_meta(dct, key):
-        return dct.get(key) if isinstance(dct, dict) else None
-
-    # Note metadata for LinkedIn/WhatsApp detection
 
     # Drop rows where created_at could not be parsed
     before = len(df)
@@ -199,19 +181,20 @@ def activities_handler(_event, _context):
 
     # Use the reusable merge strategy from sync_state manager
     sync_manager.write_with_merge_strategy(
-        df=out_df, s3_path=path, partition_cols=["dt"], primary_key_col="activity_id"
+        df=out_df,
+        s3_path=path,
+        partition_cols=["dt"],
+        compression="snappy",
+        primary_key_col="activity_id",
+        parquet_write_mode="overwrite_partitions",
     )
 
     # Update sync state with the latest dates from the processed data
-    try:
-        sync_manager.update_sync_state(
-            "activities",
-            last_created_at=max_created,
-            last_modified_at=max_modified,
-            records_processed=len(out_df),
-        )
-    except Exception as e:
-        LOG.warning(f"Failed to update sync state: {e}")
-
+    sync_manager.update_sync_state(
+        "activities",
+        last_created_at=max_created,
+        last_modified_at=max_modified,
+        records_processed=len(out_df),
+    )
     LOG.info("Wrote %s activity rows to %s", len(out_df), path)
     return {"written": int(len(out_df))}

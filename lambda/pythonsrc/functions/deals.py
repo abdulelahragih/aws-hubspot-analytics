@@ -1,12 +1,11 @@
 import logging
 import os
-import re
 from typing import Any, Dict, List, Optional
 
-import awswrangler as wr
 import pandas as pd
+from helpers.sync_state import get_sync_manager
 
-from helpers.utils import _parse_hs_datetime
+from helpers.utils import parse_hs_datetime, utc_now_iso
 from hubspot_client import get_client
 from helpers.storage import ensure_bucket_env
 
@@ -46,8 +45,6 @@ SOURCE_PROPS = [
 
 ALL_PROPS = [*BASE_PROPS, *STAGE_PROPS, *SOURCE_PROPS]
 
-SOURCE_KEY_RE = re.compile(r"(source|type|origin)", re.IGNORECASE)
-
 
 def _pick_first(*values: Any) -> Any:
     for v in values:
@@ -73,35 +70,35 @@ def _stage_ts(props: Dict[str, Any], code: str) -> Optional[pd.Timestamp]:
     JS precedence: hs_v2_date_entered_* OR hs_date_entered_* (parse ms or ISO)
     """
     v = props.get(f"hs_v2_date_entered_{code}") or props.get(f"hs_date_entered_{code}")
-    return _parse_hs_datetime(v)
+    return parse_hs_datetime(v)
 
 
 def deals_handler(_event, _context):
-    """Ingest a richer Raw Deal dataset (parity with fetchDealData.gs props).
+    """Ingest a Raw Deal dataset (parity with fetchDealData.gs props).
 
-    This uses CRM v3 search with createdate window (START_DATE..now) to bound volume.
+    This uses CRM v3 search.
     Associations (company/contact names) are not resolved here; join in Athena if needed.
     """
     LOG.info("Running raw deals ingest")
     ensure_bucket_env()
 
-    from helpers.sync_state import get_sync_manager
-
     client = get_client()
     sync_manager = get_sync_manager()
 
-    # Determine sync strategy and date range
-    from_date, to_date = sync_manager.get_sync_dates("deals")
+    sync_state = sync_manager.get_sync_dates("deals")
+    created_from_date = sync_state.new_records_checkpoint.isoformat() if sync_state.new_records_checkpoint else utc_now_iso()
+    modified_from_date = sync_state.modified_records_check_point.isoformat() if sync_state.modified_records_check_point else utc_now_iso()
+    to_date = utc_now_iso()
 
-    if from_date:
+    if sync_state.is_incremental_sync_enabled:
         # Incremental sync using dual-fetch strategy
-        LOG.info(f"Performing incremental sync from {from_date} to {to_date}")
+        LOG.info(f"Performing incremental sync from new:{created_from_date} modified:{modified_from_date} to {to_date}")
 
         # Fetch newly created deals
         created_deals: List[Dict[str, Any]] = client.search_between_chunked(
             object_type="deals",
             properties=ALL_PROPS + ["hs_lastmodifieddate", "createdate"],
-            from_iso=from_date,
+            from_iso=created_from_date,
             to_iso=to_date,
             search_prop="createdate",
             sort_direction="ASCENDING",
@@ -111,15 +108,15 @@ def deals_handler(_event, _context):
         modified_deals: List[Dict[str, Any]] = client.search_between_chunked(
             object_type="deals",
             properties=ALL_PROPS + ["hs_lastmodifieddate", "createdate"],
-            from_iso=from_date,
+            from_iso=modified_from_date,
             to_iso=to_date,
-            search_prop="hs_lastmodifieddate",
-            sort_direction="ASCENDING",
+            search_prop="hs_lastmodifieddate"
         )
 
         # Merge and deduplicate by deal ID (keep the most recent version)
         deals_by_id: Dict[str, Dict[str, Any]] = {}
-        for deal in created_deals + modified_deals:
+        combined_deals = created_deals + modified_deals
+        for deal in combined_deals:
             deal_id = deal.get("id")
             if deal_id:
                 deals_by_id[deal_id] = deal
@@ -143,6 +140,7 @@ def deals_handler(_event, _context):
 
     if not result:
         LOG.info("No deals to write")
+        sync_manager.update_sync_state("deals", records_processed=0)
         return {"written": 0}
 
     deals: List[Dict[str, Any]] = []
@@ -158,9 +156,9 @@ def deals_handler(_event, _context):
             "company_id": company_id,
             "contact_id": contact_id,
             "deal_stage": properties.get("dealstage"),
-            "created_at": _parse_hs_datetime(properties.get("createdate")),
-            "closed_at": _parse_hs_datetime(properties.get("closedate")),
-            "last_modified_at": _parse_hs_datetime(properties.get("hs_lastmodifieddate")),
+            "created_at": parse_hs_datetime(properties.get("createdate")),
+            "closed_at": parse_hs_datetime(properties.get("closedate")),
+            "last_modified_at": parse_hs_datetime(properties.get("hs_lastmodifieddate")),
             "amount": properties.get("amount"),
             # stage dates in ms
             "op_detected_at": _stage_ts(properties, STG["op"]),
@@ -182,11 +180,7 @@ def deals_handler(_event, _context):
     df = pd.DataFrame.from_records(deals)
     if df.empty:
         LOG.info("No deals to write after normalization")
-        # Update sync state even if no data to track that sync ran
-        try:
-            sync_manager.update_sync_state("deals", records_processed=0)
-        except Exception as e:
-            LOG.warning(f"Failed to update sync state: {e}")
+        sync_manager.update_sync_state("deals", records_processed=0)
         return {"written": 0}
 
     df["dt"] = df["created_at"].dt.strftime("%Y-%m-%d")
@@ -199,21 +193,19 @@ def deals_handler(_event, _context):
 
     path = f"s3://{S3_BUCKET}/curated/deals/"
 
-    # Use the reusable merge strategy from sync_state manager
     sync_manager.write_with_merge_strategy(
-        df=out_df, s3_path=path, partition_cols=["dt"], primary_key_col="deal_id"
+        df=out_df,
+        s3_path=path,
+        partition_cols=["dt"],
+        primary_key_col="deal_id"
     )
 
-    # Update sync state with the latest dates from the processed data
-    try:
-        sync_manager.update_sync_state(
-            "deals",
-            last_created_at=max_created,
-            last_modified_at=max_modified,
-            records_processed=len(out_df),
-        )
-    except Exception as e:
-        LOG.warning(f"Failed to update sync state: {e}")
+    sync_manager.update_sync_state(
+        "deals",
+        last_created_at=max_created,
+        last_modified_at=max_modified,
+        records_processed=len(out_df),
+    )
 
     LOG.info("Wrote %s raw deal rows to %s", len(out_df), path)
     return {"written": int(len(out_df))}

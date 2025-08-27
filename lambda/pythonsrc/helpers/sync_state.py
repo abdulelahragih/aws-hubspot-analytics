@@ -10,13 +10,21 @@ This module provides functionality to:
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Literal
 import boto3
-from botocore.exceptions import ClientError
 import pandas as pd
-
+from botocore.exceptions import ClientError
+from utils import parse_iso_utc
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
+
+
+class SyncState:
+    def __init__(self, is_incremental_sync_enabled: bool = False, new_records_checkpoint: Optional[datetime] = None,
+                 modified_records_check_point: Optional[datetime] = None):
+        self.is_incremental_sync_enabled = is_incremental_sync_enabled
+        self.new_records_checkpoint = new_records_checkpoint
+        self.modified_records_check_point = modified_records_check_point
 
 
 class SyncStateManager:
@@ -87,7 +95,7 @@ class SyncStateManager:
 
     def get_sync_dates(
             self, object_type: str, buffer_hours: int = 2
-    ) -> Tuple[Optional[str], str]:
+    ) -> SyncState:
         """
         Determine the date range for sync based on incremental sync settings.
 
@@ -98,55 +106,48 @@ class SyncStateManager:
         Returns:
             Tuple of (from_date, to_date) where from_date is None for full sync
         """
-        to_date = datetime.now(timezone.utc).isoformat()
+        is_incremental_sync_enabled = self.is_incremental_sync_enabled()
 
-        if not self.is_incremental_sync_enabled():
+        if not is_incremental_sync_enabled:
             LOG.info(
                 f"Incremental sync disabled for {object_type}, performing full sync"
             )
-            return None, to_date
+            return SyncState(is_incremental_sync_enabled=is_incremental_sync_enabled)
 
         sync_state = self.get_sync_state(object_type)
         if not sync_state:
             LOG.info(
                 f"No sync state found for {object_type}, performing initial full sync"
             )
-            return None, to_date
+            return SyncState(is_incremental_sync_enabled=is_incremental_sync_enabled)
 
         # Use the most recent date from either created_at or modified_at
         last_created = sync_state.get("last_created_at")
         last_modified = sync_state.get("last_modified_at")
-
-        # Choose the more recent date, or fall back to last_sync_at
-        from_date_str = None
+        last_modified_checkpoint = None
+        last_created_checkpoint = None
         if last_created and last_modified:
             # Use the more recent of the two
-            created_dt = pd.to_datetime(last_created, utc=True)
-            modified_dt = pd.to_datetime(last_modified, utc=True)
-            from_date_str = max(created_dt, modified_dt).isoformat()
-        elif last_created:
-            from_date_str = last_created
-        elif last_modified:
-            from_date_str = last_modified
-        else:
-            # Fall back to last sync time
-            from_date_str = sync_state.get("last_sync_at")
-
-        if from_date_str:
-            # Apply buffer to catch any late updates
-            from_dt = pd.to_datetime(from_date_str, utc=True) - timedelta(
+            last_created_checkpoint = parse_iso_utc(last_created) - timedelta(
                 hours=buffer_hours
             )
-            from_date_iso = from_dt.isoformat()
-            LOG.info(
-                f"Incremental sync for {object_type} from {from_date_iso} (with {buffer_hours}h buffer)"
+            last_modified_checkpoint = parse_iso_utc(last_modified) - timedelta(
+                hours=buffer_hours
             )
-            return from_date_iso, to_date
-        else:
-            LOG.info(
-                f"No valid date found in sync state for {object_type}, performing full sync"
+        elif last_created:
+            last_created_checkpoint = parse_iso_utc(last_created) - timedelta(
+                hours=buffer_hours
             )
-            return None, to_date
+        elif last_modified:
+            last_modified_checkpoint = parse_iso_utc(last_modified) - timedelta(
+                hours=buffer_hours
+            )
+
+        return SyncState(
+            is_incremental_sync_enabled=is_incremental_sync_enabled,
+            new_records_checkpoint=last_created_checkpoint,
+            modified_records_check_point=last_modified_checkpoint,
+        )
 
     def extract_date_bounds_from_data(
             self, df: pd.DataFrame
@@ -187,22 +188,17 @@ class SyncStateManager:
             partition_cols: List[str],
             primary_key_col: str,
             compression: str = "snappy",
+            parquet_write_mode: Literal["append", "overwrite", "overwrite_partitions"] | None = "overwrite_partitions",
     ) -> None:
         """
         Write DataFrame to S3 using appropriate strategy based on incremental sync setting.
 
         For incremental sync: merges with existing partition data to avoid duplicates.
         For full sync: overwrites all data.
-
-        Args:
-            df: DataFrame to write
-            s3_path: S3 path (e.g., "s3://bucket/curated/deals/")
-            partition_cols: List of partition column names (e.g., ["dt"])
-            primary_key_col: Column name for deduplication (e.g., "deal_id")
-            compression: Compression format for parquet files
         """
         import awswrangler as wr
 
+        partition_col = "dt"
         if self.is_incremental_sync_enabled():
             # Get unique partitions from new data
             if len(partition_cols) == 1:
@@ -265,7 +261,7 @@ class SyncStateManager:
                 dataset=True,
                 compression=compression,
                 partition_cols=partition_cols,
-                mode="overwrite_partitions",
+                mode=parquet_write_mode,
             )
         else:
             # Full sync - simply overwrite everything
@@ -275,7 +271,7 @@ class SyncStateManager:
                 dataset=True,
                 compression=compression,
                 partition_cols=partition_cols,
-                mode="overwrite_partitions",
+                mode=parquet_write_mode,
             )
 
 

@@ -14,6 +14,12 @@ import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 
+function getUtcDateOneYearAgo(): string {
+    const now = new Date();
+    now.setUTCFullYear(now.getUTCFullYear() - 1);
+    return now.toISOString().slice(0, 10);
+}
+
 export class HubspotAnalyticsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -71,7 +77,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       environment: {
         S3_BUCKET: bucket.bucketName,
         HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-        START_DATE: process.env.START_DATE ?? "2025-01-01",
         TASK: "deals",
         SYNC_STATE_TABLE: syncStateTable.tableName,
         INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
@@ -88,26 +93,8 @@ export class HubspotAnalyticsStack extends cdk.Stack {
         environment: {
           S3_BUCKET: bucket.bucketName,
           HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-          START_DATE: process.env.START_DATE ?? "2025-01-01",
+          START_DATE: process.env.START_DATE ?? getUtcDateOneYearAgo(),
           TASK: "activities",
-          SYNC_STATE_TABLE: syncStateTable.tableName,
-          INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
-        },
-      }
-    );
-
-    const contactsFn = new lambda.DockerImageFunction(
-      this,
-      "ContactsIngestFn",
-      {
-        code: dockerCode,
-        memorySize: 2048,
-        timeout: cdk.Duration.minutes(15),
-        environment: {
-          S3_BUCKET: bucket.bucketName,
-          HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-          START_DATE: process.env.START_DATE ?? "2025-01-01",
-          TASK: "contacts",
           SYNC_STATE_TABLE: syncStateTable.tableName,
           INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
         },
@@ -132,7 +119,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       environment: {
         S3_BUCKET: bucket.bucketName,
         HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-        START_DATE: process.env.START_DATE ?? "2025-01-01",
         TASK: "companies",
         SYNC_STATE_TABLE: syncStateTable.tableName,
         INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
@@ -154,18 +140,17 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       }
     );
 
-    const contactsDimFn = new lambda.DockerImageFunction(
+    const contactsFn = new lambda.DockerImageFunction(
       this,
-      "ContactsDimFn",
+      "ContactsFn",
       {
         code: dockerCode,
-        memorySize: 1536,
-        timeout: cdk.Duration.minutes(10),
+        memorySize: 2048,
+        timeout: cdk.Duration.minutes(15),
         environment: {
           S3_BUCKET: bucket.bucketName,
           HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-          START_DATE: process.env.START_DATE ?? "2025-01-01",
-          TASK: "contacts_dim",
+          TASK: "contacts",
           SYNC_STATE_TABLE: syncStateTable.tableName,
           INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
         },
@@ -178,7 +163,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     bucket.grantReadWrite(ownersFn);
     bucket.grantReadWrite(companiesFn);
     bucket.grantReadWrite(pipelinesDimFn);
-    bucket.grantReadWrite(contactsDimFn);
 
     hubspotSecret.grantRead(dealsFn);
     hubspotSecret.grantRead(activitiesFn);
@@ -186,21 +170,18 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     hubspotSecret.grantRead(ownersFn);
     hubspotSecret.grantRead(companiesFn);
     hubspotSecret.grantRead(pipelinesDimFn);
-    hubspotSecret.grantRead(contactsDimFn);
 
     // Grant DynamoDB permissions for sync state tracking
     syncStateTable.grantReadWriteData(dealsFn);
     syncStateTable.grantReadWriteData(activitiesFn);
     syncStateTable.grantReadWriteData(contactsFn);
     syncStateTable.grantReadWriteData(companiesFn);
-    syncStateTable.grantReadWriteData(contactsDimFn);
 
     // Grant Parameter Store read permissions
     incrementalSyncParameter.grantRead(dealsFn);
     incrementalSyncParameter.grantRead(activitiesFn);
     incrementalSyncParameter.grantRead(contactsFn);
     incrementalSyncParameter.grantRead(companiesFn);
-    incrementalSyncParameter.grantRead(contactsDimFn);
 
     new cdk.CfnOutput(this, "BucketName", { value: bucket.bucketName });
     new cdk.CfnOutput(this, "DealsFunctionName", {
@@ -221,9 +202,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, "PipelinesDimFunctionName", {
       value: pipelinesDimFn.functionName,
-    });
-    new cdk.CfnOutput(this, "ContactsDimFunctionNameDim", {
-      value: contactsDimFn.functionName,
     });
     new cdk.CfnOutput(this, "HubspotSecretName", {
       value: hubspotSecret.secretName,
@@ -305,7 +283,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     ownersFn.grantInvoke(stepFunctionRole);
     companiesFn.grantInvoke(stepFunctionRole);
     pipelinesDimFn.grantInvoke(stepFunctionRole);
-    contactsDimFn.grantInvoke(stepFunctionRole);
     notificationTopic.grantPublish(stepFunctionRole);
 
     // Grant permissions to start Glue crawlers
@@ -346,9 +323,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     const wait7 = new stepfunctions.Wait(this, "Wait7", {
       time: stepfunctions.WaitTime.duration(cdk.Duration.seconds(10)),
     });
-    const wait8 = new stepfunctions.Wait(this, "Wait8", {
-      time: stepfunctions.WaitTime.duration(cdk.Duration.seconds(10)),
-    });
 
     const invokeDealsFn = new stepfunctionstasks.LambdaInvoke(
       this,
@@ -365,15 +339,6 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       {
         lambdaFunction: activitiesFn,
         resultPath: "$.activitiesResult",
-      }
-    );
-
-    const invokeContactsFn = new stepfunctionstasks.LambdaInvoke(
-      this,
-      "InvokeContactsFunction",
-      {
-        lambdaFunction: contactsFn,
-        resultPath: "$.contactsResult",
       }
     );
 
@@ -404,12 +369,12 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       }
     );
 
-    const invokeContactsDimFn = new stepfunctionstasks.LambdaInvoke(
+    const invokeContactsFn = new stepfunctionstasks.LambdaInvoke(
       this,
-      "InvokeContactsDimFunction",
+      "InvokeContactsFunction",
       {
-        lambdaFunction: contactsDimFn,
-        resultPath: "$.contactsDimResult",
+        lambdaFunction: contactsFn,
+        resultPath: "$.contactsResult",
       }
     );
 
@@ -482,18 +447,16 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       .next(wait1)
       .next(invokeActivitiesFn)
       .next(wait2)
-      .next(invokeContactsFn)
-      .next(wait3)
       .next(invokeOwnersFn)
-      .next(wait4)
+      .next(wait3)
       .next(invokeCompaniesFn)
-      .next(wait5)
+      .next(wait4)
       .next(invokePipelinesDimFn)
+      .next(wait5)
+      .next(invokeContactsFn)
       .next(wait6)
-      .next(invokeContactsDimFn)
-      .next(wait7)
       .next(startCuratedCrawler)
-      .next(wait8)
+      .next(wait7)
       .next(startDimCrawler)
       .next(prepareSuccessMessage)
       .next(successNotification);
