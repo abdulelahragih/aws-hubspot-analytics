@@ -11,3 +11,5 @@ google-scripts/
 .idea/
 __pycache__/
 .cursor/mcp.json
+
+.env
