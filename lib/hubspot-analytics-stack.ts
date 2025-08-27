@@ -1,5 +1,5 @@
 import * as cdk from "aws-cdk-lib";
-import {Construct} from "constructs";
+import { Construct } from "constructs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as path from "path";
@@ -14,23 +14,55 @@ import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 
+// Environment configuration interface
+interface EnvironmentConfig {
+  readonly environment: string;
+  readonly isProduction: boolean;
+  readonly snsEmailRecipients: string[];
+}
+
+// Load environment configuration
+function loadEnvironmentConfig(): EnvironmentConfig {
+  const environment =
+    process.env.CDK_ENVIRONMENT || process.env.NODE_ENV || "dev";
+  const isProduction =
+    environment.toLowerCase() === "prod" ||
+    environment.toLowerCase() === "production";
+
+  // SNS email recipients from environment variables
+  const snsEmails = process.env.SNS_EMAIL_RECIPIENTS
+    ? process.env.SNS_EMAIL_RECIPIENTS.split(",").map((email) => email.trim())
+    : [];
+
+
+  return {
+    environment,
+    isProduction,
+    snsEmailRecipients: snsEmails
+  };
+}
+
 function getUtcDateOneYearAgo(): string {
-    const now = new Date();
-    now.setUTCFullYear(now.getUTCFullYear() - 1);
-    return now.toISOString().slice(0, 10);
+  const now = new Date();
+  now.setUTCFullYear(now.getUTCFullYear() - 1);
+  return now.toISOString().slice(0, 10);
 }
 
 export class HubspotAnalyticsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // S3 bucket for data lake (dev-friendly removal policy)
+    const envConfig = loadEnvironmentConfig();
+
+    // S3 bucket for data lake
     const bucket = new s3.Bucket(this, "DataLakeBucket", {
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
+      removalPolicy: envConfig.isProduction
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: !envConfig.isProduction,
     });
 
     // Secret for HubSpot token (seed with env if provided, else let AWS generate a placeholder)
@@ -41,14 +73,15 @@ export class HubspotAnalyticsStack extends cdk.Stack {
 
     // DynamoDB table for tracking sync state
     const syncStateTable = new dynamodb.Table(this, "SyncStateTable", {
-      tableName: "hubspot-sync-state",
+      tableName: `hubspot-sync-state-${envConfig.environment}`,
       partitionKey: {
         name: "object_type",
         type: dynamodb.AttributeType.STRING,
       },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      pointInTimeRecovery: true,
+      removalPolicy: envConfig.isProduction
+        ? cdk.RemovalPolicy.RETAIN
+        : cdk.RemovalPolicy.DESTROY
     });
 
     // Parameter Store parameter for incremental sync toggle
@@ -140,22 +173,18 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       }
     );
 
-    const contactsFn = new lambda.DockerImageFunction(
-      this,
-      "ContactsFn",
-      {
-        code: dockerCode,
-        memorySize: 2048,
-        timeout: cdk.Duration.minutes(15),
-        environment: {
-          S3_BUCKET: bucket.bucketName,
-          HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
-          TASK: "contacts",
-          SYNC_STATE_TABLE: syncStateTable.tableName,
-          INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
-        },
-      }
-    );
+    const contactsFn = new lambda.DockerImageFunction(this, "ContactsFn", {
+      code: dockerCode,
+      memorySize: 2048,
+      timeout: cdk.Duration.minutes(15),
+      environment: {
+        S3_BUCKET: bucket.bucketName,
+        HUBSPOT_SECRET_ARN: hubspotSecret.secretArn,
+        TASK: "contacts",
+        SYNC_STATE_TABLE: syncStateTable.tableName,
+        INCREMENTAL_SYNC_PARAMETER: incrementalSyncParameter.parameterName,
+      },
+    });
 
     bucket.grantReadWrite(dealsFn);
     bucket.grantReadWrite(activitiesFn);
@@ -263,13 +292,17 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       this,
       "HubspotDataIngestNotifications",
       {
-        displayName: "HubSpot Data Ingest Notifications",
+        displayName: `HubSpot Data Ingest Notifications - ${envConfig.environment}`,
+        topicName: `hubspot-data-ingest-${envConfig.environment}`,
       }
     );
 
-    notificationTopic.addSubscription(
-      new subscriptions.EmailSubscription("aragih@zircon.tech")
-    );
+    // Add email subscriptions based on environment configuration
+    envConfig.snsEmailRecipients.forEach((email, _) => {
+      notificationTopic.addSubscription(
+        new subscriptions.EmailSubscription(email)
+      );
+    });
 
     // === Step Functions State Machine for orchestrating lambda execution ===
     const stepFunctionRole = new iam.Role(this, "StepFunctionRole", {
@@ -517,11 +550,10 @@ export class HubspotAnalyticsStack extends cdk.Stack {
       this,
       "WeeklyHubspotIngestSchedule",
       {
-        name: "hubspot-weekly-ingest",
-        description:
-          "Trigger HubSpot data ingestion workflow every Sunday at 5 AM Santiago time",
+        name: `hubspot-weekly-ingest-${envConfig.environment}`,
+        description: `Trigger HubSpot data ingestion workflow every Sunday at 5 AM Montevideo time (${envConfig.environment})`,
         scheduleExpression: "cron(0 5 ? * SUN *)", // 5 AM every Sunday
-        scheduleExpressionTimezone: "America/Santiago", // Native timezone support!
+        scheduleExpressionTimezone: "America/Montevideo",
         flexibleTimeWindow: {
           mode: "OFF", // Execute exactly at scheduled time
         },
@@ -531,10 +563,11 @@ export class HubspotAnalyticsStack extends cdk.Stack {
           input: JSON.stringify({
             reason: "Weekly Sunday run",
             scheduledExecution: true,
-            timezone: "America/Santiago",
+            timezone: "America/Montevideo",
+            environment: envConfig.environment,
           }),
         },
-        state: "ENABLED",
+        state: envConfig.isProduction ? "ENABLED" : "DISABLED", // Disable scheduler in non-prod by default
       }
     );
 
@@ -559,7 +592,7 @@ export class HubspotAnalyticsStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, "ScheduleName", {
-      value: weeklySchedule.name || "hubspot-weekly-ingest",
+      value: weeklySchedule.name || weeklySchedule.attrArn,
       description:
         "EventBridge Scheduler name for weekly Sunday scheduling in Santiago timezone",
     });
