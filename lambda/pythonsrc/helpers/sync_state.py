@@ -14,7 +14,8 @@ from typing import Optional, Tuple, Dict, Any, List, Literal
 import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
-from utils import parse_iso_utc
+from helpers.utils import parse_iso_utc
+
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 

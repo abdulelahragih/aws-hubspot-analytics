@@ -5,7 +5,6 @@ from datetime import datetime
 import awswrangler as wr
 import pandas as pd
 
-
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
 

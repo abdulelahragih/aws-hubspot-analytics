@@ -14,7 +14,6 @@ LOG.setLevel(logging.INFO)
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
 def parse_iso_utc(s: str) -> datetime:
     """Parse ISO/date-only to an aware UTC datetime."""
     s = s.strip()
